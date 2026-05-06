@@ -1,0 +1,50 @@
+{
+  "scopeName": "source.nira",
+  "name": "Nira",
+  "fileTypes": ["nr"],
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.nira",
+      "match": "#.*$"
+    },
+    {
+      "name": "string.quoted.double.nira",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.nira",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "keyword.control.nira",
+      "match": "\\b(if|else|for|while|in|return|import|export|arena|or|stop|main)\\b"
+    },
+    {
+      "name": "constant.language.nira",
+      "match": "\\b(true|false|null)\\b"
+    },
+    {
+      "name": "storage.type.nira",
+      "match": "\\b(int|float|string|bool)\\b"
+    },
+    {
+      "name": "support.function.nira",
+      "match": "\\b(print|json_decode|json_encode|len|__builtin_[a-zA-Z0-9_]+)\\b"
+    },
+    {
+      "name": "entity.name.function.nira",
+      "match": "^\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=:)"
+    },
+    {
+      "name": "constant.numeric.nira",
+      "match": "\\b\\d+(\\.\\d+)?\\b"
+    },
+    {
+      "name": "keyword.operator.nira",
+      "match": "(\\+|\\-|\\*|/|==|!=|<|>|<=|>=|=|->)"
+    }
+  ]
+}

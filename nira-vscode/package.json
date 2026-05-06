@@ -1,0 +1,38 @@
+{
+  "name": "nira",
+  "displayName": "Nira Language Support",
+  "description": "Syntax highlighting and language support for the Nira programming language.",
+  "version": "0.1.0",
+  "publisher": "nira",
+  "engines": {
+    "vscode": "^1.0.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "nira",
+        "aliases": [
+          "Nira",
+          "nira"
+        ],
+        "extensions": [
+          ".nr"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nira",
+        "scopeName": "source.nira",
+        "path": "./syntaxes/nira.tmLanguage.json"
+      }
+    ]
+  },
+  "activationEvents": [
+    "onLanguage:nira"
+  ]
+}
