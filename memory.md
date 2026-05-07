@@ -23,6 +23,19 @@ Kami baru saja menyelesaikan fase penguatan (**hardening**) pada arsitektur runt
 - **Stabilitas Objek & Array**: Memperbaiki korupsi data pada inisialisasi literal objek dalam kode C yang dihasilkan.
 - **Built-in Map**: Mengintegrasikan fungsi bawaan seperti `toString` dan `toInt` di generator C dan *runtime*.
 
+### 5. Module Resolution & Path Architecture
+- **Executable Path Detection**: Nira secara otomatis mendeteksi lokasi binary-nya menggunakan `_NSGetExecutablePath()` (macOS) atau `readlink("/proc/self/exe")` (Linux). Dari situ, path `lib/` dan `.nira/libs/` dikomputasi relatif terhadap binary.
+- **Import Resolution Order**:
+  1. **Workspace relative**: `<include_paths>/<module>.nr`
+  2. **Current dir**: `<module>.nr`
+  3. **Standard library**: `<nira_dir>/lib/<module>.nr`
+  4. **Local packages**: `<workspace>/.nira/libs/<module>/<module>.nr`
+  5. **Global packages**: `<nira_dir>/.nira/libs/<module>/<module>.nr`
+- **Package Installation**:
+  - `nira install <pkg>` → `<workspace>/.nira/libs/` (project-local)
+  - `nira install -g <pkg>` → `<nira_dir>/.nira/libs/` (global, shared antar proyek)
+- **JIT FFI Include Path**: Saat mengompilasi blok `native:`, Nira menghitung `-I<nira_dir>/include` dari path `lib/` sehingga header seperti `evaluator.h` selalu ditemukan.
+
 ---
 
 ## 🚀 Apa yang Akan Dilakukan?
