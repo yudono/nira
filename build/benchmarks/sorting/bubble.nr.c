@@ -63,8 +63,8 @@ static inline Value nr_rt_add(Value l, Value r) {
     char buf_l[64], buf_r[64]; char *sl, *sr;
     if (l.type == VAL_STR) sl = l.data.s; else if (l.type == VAL_INT) { snprintf(buf_l, 64, "%lld", l.data.i); sl = buf_l; } else if (l.type == VAL_FLOAT) { snprintf(buf_l, 64, "%g", l.data.f); sl = buf_l; } else sl = "nil";
     if (r.type == VAL_STR) sr = r.data.s; else if (r.type == VAL_INT) { snprintf(buf_r, 64, "%lld", r.data.i); sr = buf_r; } else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, "%g", r.data.f); sr = buf_r; } else sr = "nil";
-    int len_l = (l.type == VAL_STR) ? strlen(l.data.s) : strlen(sl);
-    int len_r = (r.type == VAL_STR) ? strlen(r.data.s) : strlen(sr);
+    int len_l = (l.type == VAL_STR) ? l.length : strlen(sl);
+    int len_r = (r.type == VAL_STR) ? r.length : strlen(sr);
     int old_alloc_size = (len_l + 1 + 7) & ~7;
     int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;
     if (nr_arena && (char*)nr_arena->current == sl + old_alloc_size) {
@@ -288,7 +288,7 @@ int main(int argc, char** argv) {
 ;
   nr_v_arr = ({ Value _a = val_arr(); _a; });
   nr_v_i = val_int(0);
-  while (nr_rt_lt_bool(nr_v_i, val_int(5000))) {
+  while (nr_v_i.data.i < val_int(5000).data.i) {
 ({ Value _t = nr_v_arr; Value _f = get_field(_t, "push"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, val_int(val_int(5000).data.i - nr_v_i.data.i), val_nil(), val_nil(), val_nil(), val_nil()); else { _r = nr_rt_push(_t, val_int(val_int(5000).data.i - nr_v_i.data.i)); } _r; });
   nr_v_i = val_int(nr_v_i.data.i + val_int(1).data.i);
   }
@@ -296,13 +296,13 @@ int main(int argc, char** argv) {
   nr_v_start = ({ Value _f = nr_v_millis; Value _r; if (_f.type == VAL_FUNC && _f.data.func_ptr) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { nr_rt_print(val_error("Function not found: millis")); _r = val_nil(); } _r; });
   nr_v_n = nr_rt_len(nr_v_arr);
   nr_v_i = val_int(0);
-  while (nr_rt_lt_bool(nr_v_i, nr_v_n)) {
+  while (nr_v_i.data.i < nr_v_n.data.i) {
   nr_v_j = val_int(0);
-  while (nr_rt_lt_bool(nr_v_j, val_int(val_int(nr_v_n.data.i - nr_v_i.data.i).data.i - val_int(1).data.i))) {
-  if (nr_rt_gt_bool(nr_rt_at(nr_v_arr, nr_v_j), nr_rt_at(nr_v_arr, val_int(nr_v_j.data.i + val_int(1).data.i)))) {
-  nr_v_temp = nr_rt_at(nr_v_arr, nr_v_j);
-nr_rt_set_at(nr_v_arr, nr_v_j, nr_rt_at(nr_v_arr, val_int(nr_v_j.data.i + val_int(1).data.i)));
-nr_rt_set_at(nr_v_arr, val_int(nr_v_j.data.i + val_int(1).data.i), nr_v_temp);
+  while (nr_v_j.data.i < val_int(val_int(nr_v_n.data.i - nr_v_i.data.i).data.i - val_int(1).data.i).data.i) {
+  if (nr_rt_gt_bool((*nr_v_arr.data.arr->elements[nr_v_j.data.i]), (*nr_v_arr.data.arr->elements[val_int(nr_v_j.data.i + val_int(1).data.i).data.i]))) {
+  nr_v_temp = (*nr_v_arr.data.arr->elements[nr_v_j.data.i]);
+(*nr_v_arr.data.arr->elements[nr_v_j.data.i] = (*nr_v_arr.data.arr->elements[val_int(nr_v_j.data.i + val_int(1).data.i).data.i]));
+(*nr_v_arr.data.arr->elements[val_int(nr_v_j.data.i + val_int(1).data.i).data.i] = nr_v_temp);
   };
   nr_v_j = val_int(nr_v_j.data.i + val_int(1).data.i);
   }
@@ -311,7 +311,7 @@ nr_rt_set_at(nr_v_arr, val_int(nr_v_j.data.i + val_int(1).data.i), nr_v_temp);
   }
 ;
   nr_v_end = ({ Value _f = nr_v_millis; Value _r; if (_f.type == VAL_FUNC && _f.data.func_ptr) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { nr_rt_print(val_error("Function not found: millis")); _r = val_nil(); } _r; });
-nr_rt_print(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(val_str("Nira: "), nr_rt_to_string(val_int(nr_v_end.data.i - nr_v_start.data.i))), val_str(" ms (First: ")), nr_rt_to_string(nr_rt_at(nr_v_arr, val_int(0)))), val_str(", Last: ")), nr_rt_to_string(nr_rt_at(nr_v_arr, val_int(4999)))), val_str(")")));
+nr_rt_print(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(val_str("Nira: "), nr_rt_to_string(val_int(nr_v_end.data.i - nr_v_start.data.i))), val_str(" ms (First: ")), nr_rt_to_string((*nr_v_arr.data.arr->elements[val_int(0).data.i]))), val_str(", Last: ")), nr_rt_to_string((*nr_v_arr.data.arr->elements[val_int(4999).data.i]))), val_str(")")));
   ArenaBlock* curr = nr_arena->old_blocks; while(curr) { ArenaBlock* next = curr->next; free(curr->heap); free(curr); curr = next; } free(nr_arena->heap_start); free(nr_arena);
   return 0; 
 }

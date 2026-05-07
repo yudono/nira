@@ -212,8 +212,8 @@ static void print_runtime(FILE *out) {
                "VAL_INT) { snprintf(buf_r, 64, \"%%lld\", r.data.i); sr = buf_r; "
                "} else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, \"%%g\", "
                "r.data.f); sr = buf_r; } else sr = \"nil\";\n");
-  fprintf(out,               "    int len_l = (l.type == VAL_STR) ? strlen(l.data.s) : strlen(sl);\n"
-               "    int len_r = (r.type == VAL_STR) ? strlen(r.data.s) : strlen(sr);\n"
+  fprintf(out,               "    int len_l = (l.type == VAL_STR) ? l.length : strlen(sl);\n"
+               "    int len_r = (r.type == VAL_STR) ? r.length : strlen(sr);\n"
                "    int old_alloc_size = (len_l + 1 + 7) & ~7;\n"
                "    int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;\n"
                "    if (nr_arena && (char*)nr_arena->current == sl + old_alloc_size) {\n"
@@ -962,13 +962,11 @@ static void set_static_type(const char* name, int type) {
 static int get_static_type(AstNode* node) {
     if (!node) return -1;
     if (node->type == AST_LITERAL_INT) return VAL_INT;
-    if (node->type == AST_LITERAL_FLOAT) return VAL_FLOAT;
     if (node->type == AST_LITERAL_STR) return VAL_STR;
+    if (node->type == AST_LITERAL_BOOL) return VAL_BOOL;
     if (node->type == AST_VAR_REF) {
         for (int i=0; i<static_type_count; i++) {
-            if (strcmp(static_types[i].name, node->data.var_ref.name) == 0) {
-                return static_types[i].type;
-            }
+            if (strcmp(static_types[i].name, node->data.var_ref.name) == 0) return static_types[i].type;
         }
     }
     if (node->type == AST_BINARY) {
@@ -980,8 +978,13 @@ static int get_static_type(AstNode* node) {
             if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE || op == OP_EQ || op == OP_NEQ) return VAL_BOOL;
         }
     }
+    if (node->type == AST_CALL) {
+        if (strcmp(node->data.call.name, "len") == 0) return VAL_INT;
+        if (strcmp(node->data.call.name, "millis") == 0) return VAL_INT;
+    }
     return -1;
 }
+
 
 void codegen_c_node(AstNode *node, FILE *out) {
   if (!node)
@@ -1001,12 +1004,22 @@ void codegen_c_node(AstNode *node, FILE *out) {
     fprintf(out, "  if (");
     BinOp op = (node->data.if_stmt.condition->type == AST_BINARY) ? node->data.if_stmt.condition->data.binary.op : -1;
     if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE) {
-        const char* fn = (op == OP_LT) ? "nr_rt_lt_bool" : (op == OP_GT) ? "nr_rt_gt_bool" : (op == OP_LE) ? "nr_rt_le_bool" : "nr_rt_ge_bool";
-        fprintf(out, "%s(", fn);
-        codegen_c_node(node->data.if_stmt.condition->data.binary.left, out);
-        fprintf(out, ", ");
-        codegen_c_node(node->data.if_stmt.condition->data.binary.right, out);
-        fprintf(out, ")");
+        int lt = get_static_type(node->data.if_stmt.condition->data.binary.left);
+        int rt = get_static_type(node->data.if_stmt.condition->data.binary.right);
+        if (lt == VAL_INT && rt == VAL_INT) {
+            const char* os = (op == OP_LT) ? "<" : (op == OP_GT) ? ">" : (op == OP_LE) ? "<=" : ">=";
+            codegen_c_node(node->data.if_stmt.condition->data.binary.left, out);
+            fprintf(out, ".data.i %s ", os);
+            codegen_c_node(node->data.if_stmt.condition->data.binary.right, out);
+            fprintf(out, ".data.i");
+        } else {
+            const char* fn = (op == OP_LT) ? "nr_rt_lt_bool" : (op == OP_GT) ? "nr_rt_gt_bool" : (op == OP_LE) ? "nr_rt_le_bool" : "nr_rt_ge_bool";
+            fprintf(out, "%s(", fn);
+            codegen_c_node(node->data.if_stmt.condition->data.binary.left, out);
+            fprintf(out, ", ");
+            codegen_c_node(node->data.if_stmt.condition->data.binary.right, out);
+            fprintf(out, ")");
+        }
     } else {
         fprintf(out, "is_truthy(");
         codegen_c_node(node->data.if_stmt.condition, out);
@@ -1025,12 +1038,22 @@ void codegen_c_node(AstNode *node, FILE *out) {
     fprintf(out, "  while (");
     BinOp op = (node->data.while_stmt.condition->type == AST_BINARY) ? node->data.while_stmt.condition->data.binary.op : -1;
     if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE) {
-        const char* fn = (op == OP_LT) ? "nr_rt_lt_bool" : (op == OP_GT) ? "nr_rt_gt_bool" : (op == OP_LE) ? "nr_rt_le_bool" : "nr_rt_ge_bool";
-        fprintf(out, "%s(", fn);
-        codegen_c_node(node->data.while_stmt.condition->data.binary.left, out);
-        fprintf(out, ", ");
-        codegen_c_node(node->data.while_stmt.condition->data.binary.right, out);
-        fprintf(out, ")");
+        int lt = get_static_type(node->data.while_stmt.condition->data.binary.left);
+        int rt = get_static_type(node->data.while_stmt.condition->data.binary.right);
+        if (lt == VAL_INT && rt == VAL_INT) {
+            const char* os = (op == OP_LT) ? "<" : (op == OP_GT) ? ">" : (op == OP_LE) ? "<=" : ">=";
+            codegen_c_node(node->data.while_stmt.condition->data.binary.left, out);
+            fprintf(out, ".data.i %s ", os);
+            codegen_c_node(node->data.while_stmt.condition->data.binary.right, out);
+            fprintf(out, ".data.i");
+        } else {
+            const char* fn = (op == OP_LT) ? "nr_rt_lt_bool" : (op == OP_GT) ? "nr_rt_gt_bool" : (op == OP_LE) ? "nr_rt_le_bool" : "nr_rt_ge_bool";
+            fprintf(out, "%s(", fn);
+            codegen_c_node(node->data.while_stmt.condition->data.binary.left, out);
+            fprintf(out, ", ");
+            codegen_c_node(node->data.while_stmt.condition->data.binary.right, out);
+            fprintf(out, ")");
+        }
     } else {
         fprintf(out, "is_truthy(");
         codegen_c_node(node->data.while_stmt.condition, out);
@@ -1062,8 +1085,8 @@ void codegen_c_node(AstNode *node, FILE *out) {
   case AST_ASSIGN: {
     int v_type = get_static_type(node->data.assign.value);
     set_static_type(node->data.assign.target, v_type);
-    if (strcmp(node->data.assign.target, "i") == 0) set_static_type("i", VAL_INT); 
-    if (strcmp(node->data.assign.target, "sum") == 0) set_static_type("sum", VAL_INT);
+     
+    
     if (strchr(node->data.assign.target, '.')) {
       char *t = strdup(node->data.assign.target);
       char *d = strchr(t, '.');
@@ -1073,7 +1096,8 @@ void codegen_c_node(AstNode *node, FILE *out) {
       fprintf(out, ");\n");
       /* free(t); */
     } else {
-      fprintf(out, "  nr_v_%s = ", node->data.assign.target);
+      set_static_type(node->data.assign.target, get_static_type(node->data.assign.value));
+    fprintf(out, "  nr_v_%s = ", node->data.assign.target);
       codegen_c_node(node->data.assign.value, out);
     }
     } break;
@@ -1193,22 +1217,42 @@ void codegen_c_node(AstNode *node, FILE *out) {
     }
     fprintf(out, "_a; })");
     break;
-  case AST_INDEX:
-    fprintf(out, "nr_rt_at(");
-    codegen_c_node(node->data.index.object, out);
-    fprintf(out, ", ");
-    codegen_c_node(node->data.index.index, out);
-    fprintf(out, ")");
-    break;
-  case AST_INDEX_ASSIGN:
-    fprintf(out, "nr_rt_set_at(");
-    codegen_c_node(node->data.index_assign.object, out);
-    fprintf(out, ", ");
-    codegen_c_node(node->data.index_assign.index, out);
-    fprintf(out, ", ");
-    codegen_c_node(node->data.index_assign.value, out);
-    fprintf(out, ")");
-    break;
+  case AST_INDEX: {
+    int it = get_static_type(node->data.index.index);
+    if (it == VAL_INT) {
+        fprintf(out, "(*");
+        codegen_c_node(node->data.index.object, out);
+        fprintf(out, ".data.arr->elements[");
+        codegen_c_node(node->data.index.index, out);
+        fprintf(out, ".data.i])");
+    } else {
+        fprintf(out, "nr_rt_at(");
+        codegen_c_node(node->data.index.object, out);
+        fprintf(out, ", ");
+        codegen_c_node(node->data.index.index, out);
+        fprintf(out, ")");
+    }
+    } break;
+  case AST_INDEX_ASSIGN: {
+    int it = get_static_type(node->data.index_assign.index);
+    if (it == VAL_INT) {
+        fprintf(out, "(*");
+        codegen_c_node(node->data.index_assign.object, out);
+        fprintf(out, ".data.arr->elements[");
+        codegen_c_node(node->data.index_assign.index, out);
+        fprintf(out, ".data.i] = ");
+        codegen_c_node(node->data.index_assign.value, out);
+        fprintf(out, ")");
+    } else {
+        fprintf(out, "nr_rt_set_at(");
+        codegen_c_node(node->data.index_assign.object, out);
+        fprintf(out, ", ");
+        codegen_c_node(node->data.index_assign.index, out);
+        fprintf(out, ", ");
+        codegen_c_node(node->data.index_assign.value, out);
+        fprintf(out, ")");
+    }
+    } break;
   case AST_IMPORT: {
     const char *m = node->data.import_stmt.path;
     const char *alias = node->data.import_stmt.alias;

@@ -1550,7 +1550,7 @@ Value eval(AstNode* node, Environment* env) {
         {
             Value cond = eval(node->data.if_stmt.condition, env);
             if (cond.type == VAL_RETURN || cond.type == VAL_BREAK || cond.type == VAL_CONTINUE) return cond;
-            if (is_truthy(cond)) {
+            if (cond.type == VAL_BOOL ? cond.data.i : (cond.type != VAL_NIL)) {
                 return eval(node->data.if_stmt.then_branch, env);
             } else if (node->data.if_stmt.else_branch) {
                 return eval(node->data.if_stmt.else_branch, env);

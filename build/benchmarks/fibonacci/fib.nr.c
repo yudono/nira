@@ -63,8 +63,8 @@ static inline Value nr_rt_add(Value l, Value r) {
     char buf_l[64], buf_r[64]; char *sl, *sr;
     if (l.type == VAL_STR) sl = l.data.s; else if (l.type == VAL_INT) { snprintf(buf_l, 64, "%lld", l.data.i); sl = buf_l; } else if (l.type == VAL_FLOAT) { snprintf(buf_l, 64, "%g", l.data.f); sl = buf_l; } else sl = "nil";
     if (r.type == VAL_STR) sr = r.data.s; else if (r.type == VAL_INT) { snprintf(buf_r, 64, "%lld", r.data.i); sr = buf_r; } else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, "%g", r.data.f); sr = buf_r; } else sr = "nil";
-    int len_l = (l.type == VAL_STR) ? strlen(l.data.s) : strlen(sl);
-    int len_r = (r.type == VAL_STR) ? strlen(r.data.s) : strlen(sr);
+    int len_l = (l.type == VAL_STR) ? l.length : strlen(sl);
+    int len_r = (r.type == VAL_STR) ? r.length : strlen(sr);
     int old_alloc_size = (len_l + 1 + 7) & ~7;
     int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;
     if (nr_arena && (char*)nr_arena->current == sl + old_alloc_size) {
