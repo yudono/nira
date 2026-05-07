@@ -76,7 +76,7 @@ static void print_runtime(FILE *out) {
           "#include <stdio.h>\n#include <stdlib.h>\n#include "
           "<string.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include "
           "<unistd.h>\n#include <sys/stat.h>\n#include <time.h>\n#include "
-          "<regex.h>\n#include <ctype.h>\n#include <math.h>\n");
+          "<regex.h>\n#include <ctype.h>\n#include <math.h>\n#include <sys/time.h>\n");
   for (int i = 0; i < extra_header_count; i++)
     fprintf(out, "#include %s\n", extra_headers[i]);
   fprintf(out,
@@ -274,10 +274,12 @@ static void print_runtime(FILE *out) {
       "Value nr_rt_file_delete(Value path) { if (path.type != VAL_STR) return "
       "val_nil(); if (!is_safe_path(path.data.s)) return val_error(\"Path "
       "traversal detected\"); remove(path.data.s); return val_int(1); }\n\n");
-  fprintf(out, "Value nr_rt_now() { return val_int((int)time(NULL)); }\nValue "
-               "nr_rt_sleep(Value ms) { if (ms.type == VAL_INT) "
-               "usleep(ms.data.i * 1000); return val_nil(); }\nValue "
-               "nr_rt_random() { return val_int(rand()); }\n\n");
+  fprintf(out, "Value nr_rt_now() { return val_int((int)time(NULL)); }\n"
+               "Value nr_rt_millis() { struct timeval tv; gettimeofday(&tv, NULL); "
+               "return val_int((int)(tv.tv_sec * 1000 + tv.tv_usec / 1000)); }\n"
+               "Value nr_rt_sleep(Value ms) { if (ms.type == VAL_INT) "
+               "usleep(ms.data.i * 1000); return val_nil(); }\n"
+               "Value nr_rt_random() { return val_int(rand()); }\n\n");
   fprintf(
       out,
       "Value nr_rt_substring(Value s, Value start, Value len) { if (s.type != "
@@ -477,7 +479,7 @@ static AstNode *nr_load_module(const char *m) {
     Lexer l;
     lexer_init(&l, src);
     Parser p;
-    parser_init(&p, &l);
+    parser_init(&p, &l, m);
     AstNode *prog = parse_program(&p);
     module_progs[idx] = prog;
     return prog;
@@ -1369,6 +1371,14 @@ void codegen_c_node(AstNode *node, FILE *out) {
       fprintf(out, "} _r; })");
       free(t);
     } else {
+      if (strcmp(n, "__builtin_millis") == 0) {
+        fprintf(out, "nr_rt_millis()");
+        break;
+      }
+      if (strcmp(n, "__builtin_time_now") == 0) {
+        fprintf(out, "nr_rt_now()");
+        break;
+      }
       char p_buf[256];
       if (current_pref) {
         sprintf(p_buf, "%s_%s", current_pref, n);

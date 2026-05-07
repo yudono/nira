@@ -5,3 +5,6 @@ export now:
 
 export sleep ms:
   return __builtin_delay(ms)
+
+export millis:
+  return __builtin_millis()

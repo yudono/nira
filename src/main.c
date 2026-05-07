@@ -237,10 +237,24 @@ int main(int argc, char *argv[]) {
   free(dir);
 
   char *source = read_file(filename);
+  if (!source) return 1;
+
+  // Check if file is binary (ELF or Mach-O)
+  unsigned char *bytes = (unsigned char *)source;
+  if ((bytes[0] == 0x7F && bytes[1] == 'E' && bytes[2] == 'L' && bytes[3] == 'F') ||
+      (bytes[0] == 0xCF && bytes[1] == 0xFA && bytes[2] == 0xED && bytes[3] == 0xFE) ||
+      (bytes[0] == 0xFE && bytes[1] == 0xED && bytes[2] == 0xFA && bytes[3] == 0xCF) ||
+      (bytes[0] == 0xCE && bytes[1] == 0xFA && bytes[2] == 0xED && bytes[3] == 0xFE)) {
+    fprintf(stderr, "\033[1;31m[ERROR]\033[0m '%s' is a compiled binary.\n", filename);
+    fprintf(stderr, "\033[1;34m-->\033[0m Run it directly: ./%s\n", filename);
+    free(source);
+    return 1;
+  }
+
   Lexer lexer;
   lexer_init(&lexer, source);
   Parser parser;
-  parser_init(&parser, &lexer);
+  parser_init(&parser, &lexer, filename);
   AstNode *program = parse_program(&parser);
   if (parser.had_error) {
     return 1;

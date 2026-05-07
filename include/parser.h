@@ -10,9 +10,10 @@ typedef struct {
     Token previous;
     int had_error;
     int in_args;
+    const char* filename;
 } Parser;
 
-void parser_init(Parser* p, Lexer* l);
+void parser_init(Parser* p, Lexer* l, const char* filename);
 AstNode* parse_program(Parser* p);
 
 #endif

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/time.h>
 #include <math.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -594,6 +595,11 @@ static Value eval_call(AstNode* node, Environment* env) {
         }
         if (strcmp(full_name, "__builtin_time_now") == 0) {
             return val_int((int)time(NULL));
+        }
+        if (strcmp(full_name, "__builtin_millis") == 0) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            return val_int((int)(tv.tv_sec * 1000 + tv.tv_usec / 1000));
         }
         if (strcmp(full_name, "__builtin_delay") == 0) {
             Value ms = eval(node->data.call.args[0], env);
@@ -1263,7 +1269,7 @@ Value eval(AstNode* node, Environment* env) {
             Lexer lex;
             lexer_init(&lex, source);
             Parser p;
-            parser_init(&p, &lex);
+            parser_init(&p, &lex, full_path);
             AstNode* imported_program = parse_program(&p);
             Environment* root = env;
             while (root->parent) root = root->parent;

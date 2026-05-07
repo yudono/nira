@@ -25,7 +25,7 @@ static int match(Parser* p, TokenType type) {
 static void report_error(Parser* p, Token tok, const char* msg) {
     if (p->had_error) return;
     fprintf(stderr, "\n\033[1;31m[SYNTAX ERROR]\033[0m %s\n", msg);
-    fprintf(stderr, "\033[1;34m-->\033[0m source.nr:%d:%d\n", tok.line, tok.column);
+    fprintf(stderr, "\033[1;34m-->\033[0m %s:%d:%d\n", p->filename ? p->filename : "source.nr", tok.line, tok.column);
     
     if (tok.text && p->lexer && p->lexer->source) {
         const char* start = tok.text;
@@ -98,10 +98,11 @@ static char* strip_quotes(Token t) {
     return result;
 }
 
-void parser_init(Parser* p, Lexer* l) {
+void parser_init(Parser* p, Lexer* l, const char* filename) {
     p->lexer = l;
     p->had_error = 0;
     p->in_args = 0;
+    p->filename = filename;
     advance(p);
 }
 
