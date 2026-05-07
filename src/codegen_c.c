@@ -539,6 +539,26 @@ static void pre_collect_native(AstNode *node) {
     }
     break;
   }
+  case AST_EXTERN: {
+    if (node->data.extern_stmt.is_header) {
+      int dup = 0;
+      for (int j = 0; j < extra_header_count; j++)
+        if (strcmp(extra_headers[j], node->data.extern_stmt.path) == 0) {
+          dup = 1;
+          break;
+        }
+      if (!dup && extra_header_count < 64) {
+        char* h = node->data.extern_stmt.path;
+        if (h[0] == '<' || h[0] == '"') extra_headers[extra_header_count++] = strdup(h);
+        else {
+          char buf[512];
+          snprintf(buf, sizeof(buf), "\"%s\"", h);
+          extra_headers[extra_header_count++] = strdup(buf);
+        }
+      }
+    }
+    break;
+  }
   default:
     break;
   }
@@ -1474,6 +1494,8 @@ void codegen_c_node(AstNode *node, FILE *out) {
     break;
   case AST_NATIVE:
     break; // Handled in collect_functions
+  case AST_EXTERN:
+    break;
   default:
     break;
   }
@@ -1561,6 +1583,8 @@ static void collect_all_globals(AstNode *node) {
   }
   case AST_RETURN:
     collect_all_globals(node->data.ret.value);
+    break;
+  case AST_EXTERN:
     break;
   default:
     break;

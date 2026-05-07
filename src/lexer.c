@@ -71,6 +71,7 @@ static TokenType check_keyword(const char* text, int len) {
     if (strncmp(text, "error", len) == 0 && len == 5) return TOKEN_KEYWORD_ERROR;
     if (strncmp(text, "fn", len) == 0 && len == 2) return TOKEN_KEYWORD_FN;
     if (strncmp(text, "native", len) == 0 && len == 6) return TOKEN_KEYWORD_NATIVE;
+    if (strncmp(text, "extern", len) == 0 && len == 6) return TOKEN_KEYWORD_EXTERN;
     return TOKEN_IDENT;
 }
 

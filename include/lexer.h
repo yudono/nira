@@ -40,6 +40,7 @@ typedef enum {
     TOKEN_FALSE,
     TOKEN_NULL,
     TOKEN_KEYWORD_ERROR,
+    TOKEN_KEYWORD_EXTERN,
     TOKEN_DOT,       // .
     TOKEN_OP_PLUS,
     TOKEN_OP_MINUS,

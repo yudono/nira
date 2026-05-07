@@ -1380,6 +1380,27 @@ Value eval(AstNode* node, Environment* env) {
             }
             return val_nil();
         }
+        case AST_EXTERN: {
+            if (node->data.extern_stmt.is_header) {
+                char* p = node->data.extern_stmt.path;
+                if (strstr(p, ".so") || strstr(p, ".dylib") || strstr(p, ".dll") || strstr(p, "lib")) {
+                    void* handle = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
+                    if (!handle) {
+                        // Try common paths or just name
+                        handle = dlopen(p, RTLD_NOW | RTLD_GLOBAL);
+                    }
+                    if (handle) {
+                        if (dl_handle_count < 64) dl_handles[dl_handle_count++] = handle;
+                    }
+                }
+            } else {
+                // For interpreter, we can't easily call raw C functions without libffi.
+                // We'll assume the function is provided via a 'native' block or 
+                // is already in the dl_handles and matches Nira's signature.
+                // We define it as a nil for now or a proxy if we want.
+            }
+            return val_nil();
+        }
         default:
             return val_nil();
     }

@@ -548,6 +548,47 @@ static AstNode* parse_native_stmt(Parser* p) {
     return node;
 }
 
+static AstNode* parse_extern_stmt(Parser* p) {
+    AstNode* node = ast_new(AST_EXTERN, p->current);
+    if (match(p, TOKEN_STRING)) {
+        node->data.extern_stmt.path = strip_quotes(p->previous);
+        node->data.extern_stmt.is_header = 1;
+        node->data.extern_stmt.name = NULL;
+        node->data.extern_stmt.params = NULL;
+        node->data.extern_stmt.param_count = 0;
+    } else {
+        consume(p, TOKEN_IDENT, "Expect function name or header string after 'extern'");
+        node->data.extern_stmt.name = copy_token_text(p->previous);
+        node->data.extern_stmt.is_header = 0;
+        
+        consume(p, TOKEN_LPAREN, "Expect '(' after extern function name");
+        int capacity = 8;
+        int count = 0;
+        char** params = nr_malloc(sizeof(char*) * capacity);
+        while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
+            consume(p, TOKEN_IDENT, "Expect parameter name");
+            if (count >= capacity) {
+                int old_cap = capacity;
+                capacity *= 2;
+                params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+            }
+            params[count++] = copy_token_text(p->previous);
+            if (match(p, TOKEN_COMMA)) {}
+        }
+        consume(p, TOKEN_RPAREN, "Expect ')' after parameters");
+        node->data.extern_stmt.params = params;
+        node->data.extern_stmt.param_count = count;
+        
+        if (match(p, TOKEN_KEYWORD_FROM)) {
+            consume(p, TOKEN_STRING, "Expect library path string after 'from'");
+            node->data.extern_stmt.path = strip_quotes(p->previous);
+        } else {
+            node->data.extern_stmt.path = NULL;
+        }
+    }
+    return node;
+}
+
 static AstNode* parse_expression(Parser* p) {
     return parse_logical(p);
 }
@@ -557,6 +598,10 @@ static AstNode* parse_statement(Parser* p) {
 
     if (match(p, TOKEN_KEYWORD_NATIVE)) {
         return parse_native_stmt(p);
+    }
+
+    if (match(p, TOKEN_KEYWORD_EXTERN)) {
+        return parse_extern_stmt(p);
     }
 
     if (match(p, TOKEN_KEYWORD_PASS)) {
@@ -668,7 +713,6 @@ static AstNode* parse_statement(Parser* p) {
         
         char* symbols[32];
         int count = 0;
-        int has_from = 0;
 
         if (check(p, TOKEN_LBRACE)) {
             advance(p);
@@ -679,14 +723,12 @@ static AstNode* parse_statement(Parser* p) {
             }
             consume(p, TOKEN_RBRACE, "Expect '}' after symbols");
             consume(p, TOKEN_KEYWORD_FROM, "Expect 'from' after symbols");
-            has_from = 1;
         } else {
             // Check if it's 'import now from time'
             if (lexer_peek_n(p->lexer, 1) == TOKEN_KEYWORD_FROM) {
                 consume(p, TOKEN_IDENT, "Expect symbol name");
                 symbols[count++] = copy_token_text(p->previous);
                 consume(p, TOKEN_KEYWORD_FROM, "Expect 'from' after symbol");
-                has_from = 1;
             }
         }
 

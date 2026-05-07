@@ -30,7 +30,8 @@ typedef enum {
     AST_LITERAL_BOOL,
     AST_LITERAL_NULL,
     AST_ERROR,
-    AST_NATIVE
+    AST_NATIVE,
+    AST_EXTERN
 } AstNodeType;
 
 struct AstNode;
@@ -168,6 +169,15 @@ typedef struct AstNode {
             int header_count;
             char* code;
         } native_stmt;
+        
+        // Extern
+        struct {
+            char* path;
+            char* name;
+            char** params;
+            int param_count;
+            int is_header;
+        } extern_stmt;
     } data;
 } AstNode;
 
