@@ -31,14 +31,15 @@ void* nr_checkpoint() { return nr_arena->current; }
 void nr_rollback(void* cp) { if(cp) nr_arena->current = cp; }
 void nr_arena_clear() { nr_arena->current = nr_arena->heap_start; }
 char* nr_strdup(const char* s) { char* d = nr_alloc(strlen(s)+1); strcpy(d, s); return d; }
-struct Value; typedef struct Value { ValueType type; union { long long i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;
+struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;
 
-static inline Value val_nil() { return (Value){.type = VAL_NIL}; }
-static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }
-static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
-static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }
-static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = (char*)s}; }
-Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }
+static inline Value val_nil() { return (Value){.type = VAL_NIL, .length = 0}; }
+static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .length = 0, .data.i = i}; }
+static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .length = 0, .data.f = f}; }
+static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .length = 0, .data.i = b ? 1 : 0}; }
+static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .length = s ? strlen(s) : 0, .data.s = (char*)s}; }
+static inline Value val_str_len(const char* s, int len) { return (Value){.type = VAL_STR, .length = len, .data.s = (char*)s}; }
+Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .length = 0, .data.s = nr_strdup(m)}; }
 Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = ptr}; }
 bool is_truthy(Value v) { if (v.type == VAL_NIL) return false; if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if (v.type == VAL_FLOAT) return v.data.f != 0.0; return true; }
 
@@ -283,8 +284,8 @@ int main(int argc, char** argv) {
   nr_v_sum = val_int(0);
   nr_v_i = val_int(0);
   while (nr_rt_lt_bool(nr_v_i, val_int(100000000))) {
-  nr_v_sum = nr_rt_add(nr_v_sum, nr_v_i);
-  nr_v_i = nr_rt_add(nr_v_i, val_int(1));
+  nr_v_sum = val_int(nr_v_sum.data.i + nr_v_i.data.i);
+  nr_v_i = val_int(nr_v_i.data.i + val_int(1).data.i);
   }
 ;
   nr_v_end = ({ Value _f = nr_v_millis; Value _r; if (_f.type == VAL_FUNC && _f.data.func_ptr) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { nr_rt_print(val_error("Function not found: millis")); _r = val_nil(); } _r; });

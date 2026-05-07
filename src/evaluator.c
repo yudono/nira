@@ -1,4 +1,11 @@
 #include "../include/evaluator.h"
+
+#define EVAL_FAST(n, e) \
+    ((n)->type == AST_LITERAL_INT ? (Value){.type = VAL_INT, .length = 0, .data.i = (n)->data.int_val} : \
+    ((n)->type == AST_VAR_REF && (n)->data.var_ref.slot >= 0 && (e)->slots ? (e)->slots[(n)->data.var_ref.slot] : \
+    eval(n, e)))
+
+
 #include "../include/parser.h"
 #include "../include/arena.h"
 #include <stdio.h>
@@ -189,7 +196,14 @@ void nr_eval_add_include_path(const char* path) {
 
 Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }
 Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
-Value val_str(char* s) { return (Value){.type = VAL_STR, .data.s = s ? nr_strdup(s) : nr_strdup("")}; }
+Value val_str(char* s) { 
+    if (!s) s = "";
+    int len = strlen(s);
+    return (Value){.type = VAL_STR, .length = len, .data.s = nr_strdup(s)}; 
+}
+Value val_str_len(char* s, int len) { 
+    return (Value){.type = VAL_STR, .length = len, .data.s = s}; 
+}
 Value val_nil() { return (Value){.type = VAL_NIL}; }
 Value val_bool(int b) { return (Value){.type = VAL_BOOL, .data.i = b}; }
 Value val_error(char* msg) { return (Value){.type = VAL_ERROR, .data.s = msg ? nr_strdup(msg) : nr_strdup("error")}; }
@@ -237,40 +251,32 @@ static unsigned int hash_key(const char* key) {
 }
 
 #define ENV_POOL_SIZE 1024
+
+#define VALUE_STACK_MAX 10000000
+static Value value_stack[VALUE_STACK_MAX];
+static int value_stack_ptr = 0;
+
 static Environment* env_pool[ENV_POOL_SIZE];
 static int env_pool_count = 0;
 
 Environment* env_new(Environment* parent, int slot_count) {
-    Environment* env = NULL;
-    if (env_pool_count > 0) {
-        env = env_pool[--env_pool_count];
-    } else {
-        env = nr_malloc(sizeof(Environment));
-        env->slots = NULL;
-        env->slots_capacity = 0;
-    }
-    
+    Environment* env = env_pool_count > 0 ? env_pool[--env_pool_count] : nr_malloc(sizeof(Environment));
     env->parent = parent;
-    env->capacity = 4;
-    env->count = 0;
-    env->table = env->fast_table;
-    for (int i = 0; i < 4; i++) env->table[i] = NULL;
-    
+    env->capacity = 0;
     env->slot_count = slot_count;
     if (slot_count > 0) {
-        if (slot_count > env->slots_capacity) {
-             env->slots = nr_malloc(sizeof(Value) * slot_count);
-             env->slots_capacity = slot_count;
-        }
-        for (int i = 0; i < slot_count; i++) env->slots[i] = (Value){.type = VAL_NIL};
+        env->slots = &value_stack[value_stack_ptr];
+        value_stack_ptr += slot_count;
+        // Only zero the FIRST slot if its small, or use memset
+        for (int i = 0; i < slot_count; i++) env->slots[i].type = VAL_NIL;
     }
-    
-    env->source = parent ? parent->source : NULL;
-    env->filename = parent ? parent->filename : NULL;
     return env;
 }
 
 void env_free(Environment* env) {
+    if (env->slot_count > 0) {
+        value_stack_ptr -= env->slot_count;
+    }
     if (env_pool_count < ENV_POOL_SIZE) {
         env_pool[env_pool_count++] = env;
     }
@@ -278,6 +284,12 @@ void env_free(Environment* env) {
 
 static void env_resize(Environment* env) {
     int old_cap = env->capacity;
+    if (old_cap == 0) {
+        env->capacity = 4;
+        env->table = env->fast_table;
+        for (int i = 0; i < 4; i++) env->table[i] = NULL;
+        return;
+    }
     Variable** old_table = env->table;
     env->capacity *= 2;
     env->table = nr_malloc(sizeof(Variable*) * env->capacity);
@@ -297,7 +309,7 @@ static void env_resize(Environment* env) {
 
 void env_define(Environment* env, char* name, Value val) {
     if (!name) return;
-    if (env->count >= env->capacity * 0.75) env_resize(env);
+    if (env->capacity == 0 || env->count >= env->capacity * 0.75) env_resize(env);
     
     unsigned int h = hash_key(name) % env->capacity;
     Variable* v = env->table[h];
@@ -321,14 +333,16 @@ void env_assign(Environment* env, char* name, Value val) {
     if (!name) return;
     Environment* curr = env;
     while (curr) {
-        unsigned int h = hash_key(name) % curr->capacity;
-        Variable* v = curr->table[h];
-        while (v) {
-            if (strcmp(v->name, name) == 0) {
-                v->value = val;
-                return;
+        if (curr->capacity > 0) {
+            unsigned int h = hash_key(name) % curr->capacity;
+            Variable* v = curr->table[h];
+            while (v) {
+                if (strcmp(v->name, name) == 0) {
+                    v->value = val;
+                    return;
+                }
+                v = v->next;
             }
-            v = v->next;
         }
         curr = curr->parent;
     }
@@ -339,11 +353,13 @@ Value env_get_by_hash(Environment* env, char* name, unsigned int h) {
     if (!name) return val_nil();
     Environment* curr = env;
     while (curr) {
-        unsigned int idx = h % curr->capacity;
-        Variable* v = curr->table[idx];
-        while (v) {
-            if (v->name && strcmp(v->name, name) == 0) return v->value;
-            v = v->next;
+        if (curr->capacity > 0) {
+            unsigned int idx = h % curr->capacity;
+            Variable* v = curr->table[idx];
+            while (v) {
+                if (v->name && strcmp(v->name, name) == 0) return v->value;
+                v = v->next;
+            }
         }
         curr = curr->parent;
     }
@@ -533,7 +549,7 @@ static Value eval_binary(AstNode* node, Environment* env) {
     } else if (l_node->type == AST_LITERAL_INT) {
         left = (Value){.type = VAL_INT, .data.i = l_node->data.int_val};
     } else {
-        left = eval(l_node, env);
+        left = EVAL_FAST(l_node, env);
         if (left.type == VAL_RETURN || left.type == VAL_BREAK || left.type == VAL_CONTINUE) return left;
     }
     
@@ -559,7 +575,7 @@ static Value eval_binary(AstNode* node, Environment* env) {
         } else if (r_node->type == AST_LITERAL_INT) {
             right = (Value){.type = VAL_INT, .data.i = r_node->data.int_val};
         } else {
-            right = eval(r_node, env);
+            right = EVAL_FAST(r_node, env);
             if (right.type == VAL_RETURN || right.type == VAL_BREAK || right.type == VAL_CONTINUE) return right;
         }
     } else {
@@ -615,7 +631,7 @@ static Value eval_binary(AstNode* node, Environment* env) {
         } else if (r_node->type == AST_LITERAL_STR) {
             right = (Value){.type = VAL_STR, .data.s = r_node->data.str_val};
         } else {
-            right = eval(r_node, env);
+            right = EVAL_FAST(r_node, env);
         }
         
         if (right.type == VAL_STR) {
@@ -718,7 +734,7 @@ static Value eval_call(AstNode* node, Environment* env) {
         
         if (func_val.type == VAL_FUNC || func_val.type == VAL_NIL) {
             if (func_val.type == VAL_NIL) {
-                func_val = env_get(env, field_name);
+                func_val = env_get_by_hash(env, field_name, node->data.call.hash);
             }
             
             if (func_val.type == VAL_FUNC) {
@@ -728,11 +744,11 @@ static Value eval_call(AstNode* node, Environment* env) {
                 
                 // Normal argument binding for methods
                 for (int i=0; i<node->data.call.arg_count && i < decl->data.func_decl.param_count; i++) {
-                    Value arg = eval(node->data.call.args[i], env);
+                    Value arg = EVAL_FAST(node->data.call.args[i], env);
                     if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
                     env_define(call_env, decl->data.func_decl.params[i], arg);
                 }
-                Value res = eval(decl->data.func_decl.body, call_env);
+                Value res = EVAL_FAST(decl->data.func_decl.body, call_env);
                 /* free(full_name); (arena managed) */
                 env_free(call_env);
                 if (res.type == VAL_RETURN) return *res.data.return_val;
@@ -743,7 +759,7 @@ static Value eval_call(AstNode* node, Environment* env) {
         // Built-ins
         if (strcmp(full_name, "print") == 0) {
             for (int i=0; i<node->data.call.arg_count; i++) {
-                Value arg = eval(node->data.call.args[i], env);
+                Value arg = EVAL_FAST(node->data.call.args[i], env);
                 if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
                 if (arg.type == VAL_INT) printf("%lld\n", arg.data.i);
                 else if (arg.type == VAL_FLOAT) printf("%g\n", arg.data.f);
@@ -1089,7 +1105,7 @@ static Value eval_call(AstNode* node, Environment* env) {
             if (native_func) {
                 Value args[6] = { val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil() };
                 for (int i=0; i<node->data.call.arg_count && i<6; i++) {
-                    Value arg = eval(node->data.call.args[i], env);
+                    Value arg = EVAL_FAST(node->data.call.args[i], env);
                     if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
                     args[i] = arg;
                 }
@@ -1249,7 +1265,7 @@ static Value eval_call(AstNode* node, Environment* env) {
         }
     } else {
         for (int i=0; i<node->data.call.arg_count && i<decl->data.func_decl.param_count; i++) {
-            Value arg = eval(node->data.call.args[i], env);
+            Value arg = EVAL_FAST(node->data.call.args[i], env);
             if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
             
             if (call_env->slots && i < call_env->slot_count) {
@@ -1403,7 +1419,7 @@ Value eval(AstNode* node, Environment* env) {
             } else if (l_node->type == AST_LITERAL_INT) {
                 left = (Value){.type = VAL_INT, .data.i = l_node->data.int_val};
             } else {
-                left = eval(l_node, env);
+                left = EVAL_FAST(l_node, env);
                 if (left.type == VAL_RETURN || left.type == VAL_BREAK || left.type == VAL_CONTINUE) return left;
             }
             
@@ -1426,7 +1442,7 @@ Value eval(AstNode* node, Environment* env) {
                 } else if (r_node->type == AST_LITERAL_INT) {
                     right = (Value){.type = VAL_INT, .data.i = r_node->data.int_val};
                 } else {
-                    right = eval(r_node, env);
+                    right = EVAL_FAST(r_node, env);
                     if (right.type == VAL_RETURN || right.type == VAL_BREAK || right.type == VAL_CONTINUE) return right;
                 }
             } else right = val_nil();
@@ -1463,9 +1479,26 @@ Value eval(AstNode* node, Environment* env) {
                 }
             }
             if (left.type == VAL_STR && op == OP_ADD && right.type == VAL_STR) {
-                char* res = malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
-                strcpy(res, left.data.s); strcat(res, right.data.s);
-                Value v = val_str(res); free(res); return v;
+                int len_l = left.length;
+                int len_r = right.length;
+                char* sl = left.data.s;
+                char* sr = right.data.s;
+                int old_alloc_size = (len_l + 1 + 7) & ~7;
+                int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;
+                Arena* a = global_arena;
+                if (a && (char*)a->current == sl + old_alloc_size) {
+                    if (a->current + (new_alloc_size - old_alloc_size) <= a->heap_end) {
+                        memcpy(sl + len_l, sr, len_r);
+                        sl[len_l + len_r] = '\0';
+                        a->current += (new_alloc_size - old_alloc_size);
+                        return (Value){.type = VAL_STR, .length = len_l + len_r, .data.s = sl};
+                    }
+                }
+                char* res = nr_malloc(len_l + len_r + 1);
+                memcpy(res, sl, len_l);
+                memcpy(res + len_l, sr, len_r);
+                res[len_l + len_r] = '\0';
+                return (Value){.type = VAL_STR, .length = len_l + len_r, .data.s = res};
             }
             return val_nil();
         }
@@ -1495,7 +1528,7 @@ Value eval(AstNode* node, Environment* env) {
             AstNode* decl = func_val.data.func.decl;
             Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
             for (int i=0; i<node->data.call.arg_count && i<decl->data.func_decl.param_count; i++) {
-                Value arg = eval(node->data.call.args[i], env);
+                Value arg = EVAL_FAST(node->data.call.args[i], env);
                 if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
                 if (call_env->slots && i < call_env->slot_count) call_env->slots[i] = arg;
                 else env_define(call_env, decl->data.func_decl.params[i], arg);

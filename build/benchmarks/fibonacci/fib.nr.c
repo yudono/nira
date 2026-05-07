@@ -31,14 +31,15 @@ void* nr_checkpoint() { return nr_arena->current; }
 void nr_rollback(void* cp) { if(cp) nr_arena->current = cp; }
 void nr_arena_clear() { nr_arena->current = nr_arena->heap_start; }
 char* nr_strdup(const char* s) { char* d = nr_alloc(strlen(s)+1); strcpy(d, s); return d; }
-struct Value; typedef struct Value { ValueType type; union { long long i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;
+struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;
 
-static inline Value val_nil() { return (Value){.type = VAL_NIL}; }
-static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }
-static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
-static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }
-static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = (char*)s}; }
-Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }
+static inline Value val_nil() { return (Value){.type = VAL_NIL, .length = 0}; }
+static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .length = 0, .data.i = i}; }
+static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .length = 0, .data.f = f}; }
+static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .length = 0, .data.i = b ? 1 : 0}; }
+static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .length = s ? strlen(s) : 0, .data.s = (char*)s}; }
+static inline Value val_str_len(const char* s, int len) { return (Value){.type = VAL_STR, .length = len, .data.s = (char*)s}; }
+Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .length = 0, .data.s = nr_strdup(m)}; }
 Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = ptr}; }
 bool is_truthy(Value v) { if (v.type == VAL_NIL) return false; if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if (v.type == VAL_FLOAT) return v.data.f != 0.0; return true; }
 

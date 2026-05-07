@@ -100,6 +100,7 @@ typedef struct AstNode {
         // Call
         struct {
             char* name;
+            unsigned int hash;
             struct AstNode** args;
             int arg_count;
             struct AstNode* cached_decl; // [NEW] Pointer to the resolved function

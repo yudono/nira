@@ -33,6 +33,7 @@ typedef struct Array {
 
 typedef struct Value {
     ValueType type;
+    int length;
     union {
         long long i;
         double f;
@@ -69,6 +70,7 @@ typedef struct Environment {
 Value val_int(long long i);
 Value val_float(double f);
 Value val_str(char* s);
+Value val_str_len(char* s, int len);
 Value val_obj();
 Value val_arr();
 Value val_func(AstNode* decl, Environment* closure);

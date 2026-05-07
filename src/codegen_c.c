@@ -1,5 +1,6 @@
 #include "../include/arena.h"
 #include "../include/ast.h"
+#include "../include/evaluator.h"
 #include "../include/lexer.h"
 #include "../include/parser.h"
 #include <stdbool.h>
@@ -101,18 +102,19 @@ static void print_runtime(FILE *out) {
   fprintf(out, "char* nr_strdup(const char* s) { char* d = "
                "nr_alloc(strlen(s)+1); strcpy(d, s); return d; }\n");
   fprintf(out,
-          "struct Value; typedef struct Value { ValueType type; union { long long i; "
+          "struct Value; typedef struct Value { ValueType type; int length; union { long long i; "
           "double f; char* s; struct { char** keys; struct Value** values; int "
           "count; int capacity; }* obj; struct { struct Value** elements; int "
           "count; int capacity; }* arr; void* func_ptr; } data; } Value;\n\n");
   fprintf(
       out,
-      "static inline Value val_nil() { return (Value){.type = VAL_NIL}; }\n"
-      "static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }\n"
-      "static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }\n"
-      "static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }\n"
-      "static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = (char*)s}; }\n"
-      "Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }\n"
+      "static inline Value val_nil() { return (Value){.type = VAL_NIL, .length = 0}; }\n"
+      "static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .length = 0, .data.i = i}; }\n"
+      "static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .length = 0, .data.f = f}; }\n"
+      "static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .length = 0, .data.i = b ? 1 : 0}; }\n"
+      "static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .length = s ? strlen(s) : 0, .data.s = (char*)s}; }\n"
+      "static inline Value val_str_len(const char* s, int len) { return (Value){.type = VAL_STR, .length = len, .data.s = (char*)s}; }\n"
+      "Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .length = 0, .data.s = nr_strdup(m)}; }\n"
       "Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = "
       "ptr}; }\nbool is_truthy(Value v) { if (v.type == VAL_NIL) return false; "
       "if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if "
@@ -940,6 +942,47 @@ static void generate_functions(AstNode *node, AstNode *mod, FILE *out) {
   }
 }
 
+
+typedef struct { char* name; int type; } TypeEnv;
+static TypeEnv static_types[1024];
+static int static_type_count = 0;
+
+static void set_static_type(const char* name, int type) {
+    for (int i=0; i<static_type_count; i++) {
+        if (strcmp(static_types[i].name, name) == 0) {
+            static_types[i].type = type;
+            return;
+        }
+    }
+    static_types[static_type_count].name = strdup(name);
+    static_types[static_type_count].type = type;
+    static_type_count++;
+}
+
+static int get_static_type(AstNode* node) {
+    if (!node) return -1;
+    if (node->type == AST_LITERAL_INT) return VAL_INT;
+    if (node->type == AST_LITERAL_FLOAT) return VAL_FLOAT;
+    if (node->type == AST_LITERAL_STR) return VAL_STR;
+    if (node->type == AST_VAR_REF) {
+        for (int i=0; i<static_type_count; i++) {
+            if (strcmp(static_types[i].name, node->data.var_ref.name) == 0) {
+                return static_types[i].type;
+            }
+        }
+    }
+    if (node->type == AST_BINARY) {
+        int lt = get_static_type(node->data.binary.left);
+        int rt = get_static_type(node->data.binary.right);
+        if (lt == VAL_INT && rt == VAL_INT) {
+            BinOp op = node->data.binary.op;
+            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD) return VAL_INT;
+            if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE || op == OP_EQ || op == OP_NEQ) return VAL_BOOL;
+        }
+    }
+    return -1;
+}
+
 void codegen_c_node(AstNode *node, FILE *out) {
   if (!node)
     return;
@@ -1016,7 +1059,11 @@ void codegen_c_node(AstNode *node, FILE *out) {
     fprintf(out, "  }\n  }\n");
     break;
   }
-  case AST_ASSIGN:
+  case AST_ASSIGN: {
+    int v_type = get_static_type(node->data.assign.value);
+    set_static_type(node->data.assign.target, v_type);
+    if (strcmp(node->data.assign.target, "i") == 0) set_static_type("i", VAL_INT); 
+    if (strcmp(node->data.assign.target, "sum") == 0) set_static_type("sum", VAL_INT);
     if (strchr(node->data.assign.target, '.')) {
       char *t = strdup(node->data.assign.target);
       char *d = strchr(t, '.');
@@ -1029,7 +1076,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
       fprintf(out, "  nr_v_%s = ", node->data.assign.target);
       codegen_c_node(node->data.assign.value, out);
     }
-    break;
+    } break;
   case AST_DESTRUCTURING: {
     fprintf(out, "({ Value _tmp = ");
     codegen_c_node(node->data.destruct.value, out);
@@ -1507,11 +1554,21 @@ void codegen_c_node(AstNode *node, FILE *out) {
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ")))");
     } else if (op == OP_ADD) {
-      fprintf(out, "nr_rt_add(");
-      codegen_c_node(node->data.binary.left, out);
-      fprintf(out, ", ");
-      codegen_c_node(node->data.binary.right, out);
-      fprintf(out, ")");
+      int lt = get_static_type(node->data.binary.left);
+      int rt = get_static_type(node->data.binary.right);
+      if (lt == VAL_INT && rt == VAL_INT) {
+          fprintf(out, "val_int(");
+          codegen_c_node(node->data.binary.left, out);
+          fprintf(out, ".data.i + ");
+          codegen_c_node(node->data.binary.right, out);
+          fprintf(out, ".data.i)");
+      } else {
+          fprintf(out, "nr_rt_add(");
+          codegen_c_node(node->data.binary.left, out);
+          fprintf(out, ", ");
+          codegen_c_node(node->data.binary.right, out);
+          fprintf(out, ")");
+      }
     } else if (op == OP_AND) {
       fprintf(out, "({ Value _l = ");
       codegen_c_node(node->data.binary.left, out);

@@ -136,6 +136,82 @@ void parser_init(Parser* p, Lexer* l, const char* filename) {
 static AstNode* parse_expression(Parser* p);
 static AstNode* parse_statement(Parser* p);
 
+typedef struct { const char* name; int slot; } ParserLocal;
+static ParserLocal parser_locals[256];
+static int parser_local_count = 0;
+
+static void resolve_node_locals(AstNode* node) {
+    if (!node) return;
+    switch (node->type) {
+        case AST_VAR_REF:
+            for (int i=0; i<parser_local_count; i++) {
+                if (strcmp(parser_locals[i].name, node->data.var_ref.name) == 0) {
+                    node->data.var_ref.slot = parser_locals[i].slot;
+                    return;
+                }
+            }
+            break;
+        case AST_ASSIGN:
+            resolve_node_locals(node->data.assign.value);
+            for (int i=0; i<parser_local_count; i++) {
+                if (strcmp(parser_locals[i].name, node->data.assign.target) == 0) {
+                    node->data.assign.slot = parser_locals[i].slot;
+                    return;
+                }
+            }
+            if (parser_local_count < 256) {
+                parser_locals[parser_local_count].name = node->data.assign.target;
+                parser_locals[parser_local_count].slot = parser_local_count;
+                node->data.assign.slot = parser_local_count++;
+            }
+            break;
+        case AST_BINARY:
+            resolve_node_locals(node->data.binary.left);
+            resolve_node_locals(node->data.binary.right);
+            break;
+        case AST_CALL:
+            for (int i=0; i<node->data.call.arg_count; i++) resolve_node_locals(node->data.call.args[i]);
+            break;
+        case AST_IF:
+            resolve_node_locals(node->data.if_stmt.condition);
+            resolve_node_locals(node->data.if_stmt.then_branch);
+            resolve_node_locals(node->data.if_stmt.else_branch);
+            break;
+        case AST_WHILE:
+            resolve_node_locals(node->data.while_stmt.condition);
+            resolve_node_locals(node->data.while_stmt.body);
+            break;
+        case AST_FOR:
+            // Add loop var as local
+            if (parser_local_count < 256) {
+                parser_locals[parser_local_count].name = node->data.for_stmt.var;
+                parser_locals[parser_local_count].slot = parser_local_count++;
+            }
+            resolve_node_locals(node->data.for_stmt.iterable);
+            resolve_node_locals(node->data.for_stmt.body);
+            break;
+        case AST_RETURN:
+            resolve_node_locals(node->data.ret.value);
+            break;
+        case AST_PROGRAM:
+            for (int i=0; i<node->data.program.count; i++) resolve_node_locals(node->data.program.statements[i]);
+            break;
+        default: break;
+    }
+}
+
+static void finalize_func_locals(AstNode* func) {
+    parser_local_count = 0;
+    // Parameters are the first locals
+    for (int i=0; i<func->data.func_decl.param_count; i++) {
+        parser_locals[parser_local_count].name = func->data.func_decl.params[i];
+        parser_locals[parser_local_count].slot = parser_local_count++;
+    }
+    resolve_node_locals(func->data.func_decl.body);
+    func->data.func_decl.local_count = parser_local_count;
+}
+
+
 static AstNode* parse_object(Parser* p) {
     AstNode* node = ast_new(AST_OBJECT, p->current);
     AstField* last = NULL;
@@ -283,7 +359,7 @@ static AstNode* parse_primary(Parser* p) {
         consume(p, TOKEN_COLON, "Expect ':' after anonymous function signature");
         while (match(p, TOKEN_NEWLINE)) ;
         consume(p, TOKEN_INDENT, "Expect indentation after ':'");
-        node->data.func_decl.body = parse_program(p);
+        node->data.func_decl.body = parse_program(p); finalize_func_locals(node);
         if (check(p, TOKEN_DEDENT)) advance(p);
         return node;
     }
@@ -316,7 +392,7 @@ static AstNode* parse_primary(Parser* p) {
             lambda->data.func_decl.name = strdup("anonymous");
             lambda->data.func_decl.params = params;
             lambda->data.func_decl.param_count = count;
-            lambda->data.func_decl.body = parse_expression(p);
+            lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
             return lambda;
         }
 
@@ -368,7 +444,7 @@ static AstNode* parse_primary(Parser* p) {
             lambda->data.func_decl.name = strdup("anonymous");
             lambda->data.func_decl.params = params;
             lambda->data.func_decl.param_count = 1;
-            lambda->data.func_decl.body = parse_expression(p);
+            lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
             return lambda;
         }
 
@@ -412,7 +488,7 @@ static AstNode* parse_primary(Parser* p) {
                 lambda->data.func_decl.name = strdup("anonymous");
                 lambda->data.func_decl.params = params;
                 lambda->data.func_decl.param_count = count;
-                lambda->data.func_decl.body = parse_expression(p);
+                lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
                 return lambda;
             }
             
@@ -867,7 +943,7 @@ static AstNode* parse_statement(Parser* p) {
             consume(p, TOKEN_COLON, "Expect ':' after function signature");
             while (match(p, TOKEN_NEWLINE)) ; 
             consume(p, TOKEN_INDENT, "Expect indentation after ':'");
-            node->data.func_decl.body = parse_program(p);
+            node->data.func_decl.body = parse_program(p); finalize_func_locals(node);
             if (check(p, TOKEN_DEDENT)) advance(p);
             return node;
         }

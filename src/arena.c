@@ -25,6 +25,7 @@ void* arena_alloc(Arena* a, size_t size) {
     if (!a) return malloc(size);
     // Align to 8 bytes
     size = (size + 7) & ~7;
+    size = (size + 7) & ~7;
     if (a->current + size > a->heap_end) {
         // Expand the arena by allocating a new chunk
         ArenaBlock* old = malloc(sizeof(ArenaBlock));
