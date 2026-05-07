@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
   nr_v_start = (nr_rt_millis()).data.i;
   { const char* _lit = ""; nr_v_s_len = strlen(_lit); memcpy(nr_v_s, _lit, nr_v_s_len); nr_v_s[nr_v_s_len] = 0; };
   nr_v_i = 0LL;
-  while ((nr_v_i < 100000LL)) {
+  while ((nr_v_i < 10000000LL)) {
 ({ Value _r = (val_str("a")); if(_r.type==VAL_STR){ memcpy(nr_v_s + nr_v_s_len, _r.data.s, _r.length); nr_v_s_len += _r.length; } else if(_r.type==VAL_INT){ nr_v_s_len += sprintf(nr_v_s+nr_v_s_len, "%lld", _r.data.i); } nr_v_s[nr_v_s_len] = 0; val_str_len(nr_v_s, nr_v_s_len); });
   nr_v_i = (nr_v_i + 1LL);
   }

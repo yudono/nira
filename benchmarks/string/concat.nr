@@ -4,7 +4,7 @@ main:
     start = millis()
     s = ""
     i = 0
-    while i < 100000:
+    while i < 10000000:
         s = s + "a"
         i = i + 1
     
