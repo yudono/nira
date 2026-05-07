@@ -11,8 +11,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <dlfcn.h>
 
-void set_field(Object* obj, const char* key, Value val) {
+void* dl_handles[64];
+int dl_handle_count = 0;
+
+void eval_set_field(Object* obj, const char* key, Value val) {
     for (int i=0; i<obj->count; i++) {
         if (strcmp(obj->keys[i], key) == 0) {
             *obj->values[i] = val;
@@ -130,6 +134,59 @@ Value env_get(Environment* env, char* name) {
             v = v->next;
         }
         curr = curr->parent;
+    }
+    return val_nil();
+}
+
+// --- FFI Compatibility ---
+
+void* nr_alloc(size_t sz) {
+    return nr_malloc(sz);
+}
+
+Value nr_rt_push(Value arr, Value val) {
+    if (arr.type != VAL_ARR) return val_nil();
+    if (arr.data.arr->count >= arr.data.arr->capacity) {
+        int old_cap = arr.data.arr->capacity;
+        arr.data.arr->capacity *= 2;
+        Value** new_el = nr_alloc(sizeof(Value*) * arr.data.arr->capacity);
+        memcpy(new_el, arr.data.arr->elements, sizeof(Value*)*old_cap);
+        arr.data.arr->elements = new_el;
+    }
+    arr.data.arr->elements[arr.data.arr->count] = nr_alloc(sizeof(Value));
+    *arr.data.arr->elements[arr.data.arr->count] = val;
+    arr.data.arr->count++;
+    return val;
+}
+
+void set_field(Value obj, const char* key, Value val) {
+    if (obj.type != VAL_OBJ) return;
+    for(int i=0; i<obj.data.obj->count; i++) {
+        if(strcmp(obj.data.obj->keys[i], key) == 0) {
+            *obj.data.obj->values[i] = val;
+            return;
+        }
+    }
+    if(obj.data.obj->count >= obj.data.obj->capacity) {
+        int old_cap = obj.data.obj->capacity;
+        obj.data.obj->capacity *= 2;
+        char** new_keys = nr_alloc(sizeof(char*) * obj.data.obj->capacity);
+        Value** new_vals = nr_alloc(sizeof(Value*) * obj.data.obj->capacity);
+        memcpy(new_keys, obj.data.obj->keys, sizeof(char*)*old_cap);
+        memcpy(new_vals, obj.data.obj->values, sizeof(Value*)*old_cap);
+        obj.data.obj->keys = new_keys;
+        obj.data.obj->values = new_vals;
+    }
+    obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key);
+    obj.data.obj->values[obj.data.obj->count] = nr_alloc(sizeof(Value));
+    *obj.data.obj->values[obj.data.obj->count] = val;
+    obj.data.obj->count++;
+}
+
+Value get_field(Value obj, const char* key) {
+    if (obj.type != VAL_OBJ) return val_nil();
+    for(int i=0; i<obj.data.obj->count; i++) {
+        if(strcmp(obj.data.obj->keys[i], key) == 0) return *obj.data.obj->values[i];
     }
     return val_nil();
 }
@@ -717,15 +774,15 @@ static Value eval_call(AstNode* node, Environment* env) {
                     }
 
                     Value req = val_obj();
-                    set_field(req.data.obj, "method", val_str(nr_strdup(method)));
-                    set_field(req.data.obj, "path", val_str(nr_strdup(path)));
+                    eval_set_field(req.data.obj, "method", val_str(nr_strdup(method)));
+                    eval_set_field(req.data.obj, "path", val_str(nr_strdup(path)));
                     
                     char* body_ptr = strstr(buffer, "\r\n\r\n");
                     if (body_ptr) {
                         body_ptr += 4;
-                        set_field(req.data.obj, "body", val_str(nr_strdup(body_ptr)));
+                        eval_set_field(req.data.obj, "body", val_str(nr_strdup(body_ptr)));
                     } else {
-                        set_field(req.data.obj, "body", val_nil());
+                        eval_set_field(req.data.obj, "body", val_nil());
                     }
                     
                     // Call Nira serve function
@@ -770,13 +827,64 @@ static Value eval_call(AstNode* node, Environment* env) {
             free(full_name);
             return val_nil();
         }
+        if (strncmp(full_name, "__native_", 9) == 0) {
+            // Find in dl_handles
+            Value (*native_func)(Value, Value, Value, Value, Value, Value) = NULL;
+            for (int i=0; i<dl_handle_count; i++) {
+                native_func = (Value (*)(Value, Value, Value, Value, Value, Value))dlsym(dl_handles[i], full_name);
+                if (native_func) break;
+            }
+            if (native_func) {
+                Value args[6] = { val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil() };
+                for (int i=0; i<node->data.call.arg_count && i<6; i++) {
+                    Value arg = eval(node->data.call.args[i], env);
+                    if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+                    args[i] = arg;
+                }
+                Value res = native_func(args[0], args[1], args[2], args[3], args[4], args[5]);
+                free(full_name);
+                return res;
+            } else {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "Native function '%s' not found in loaded dynamic libraries", full_name);
+                report_runtime_error(node, env, "FFI", buf);
+                free(full_name);
+                return val_nil();
+            }
+        }
         if (strcmp(full_name, "toInt") == 0) {
             Value v = eval(node->data.call.args[0], env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
             int res = 0;
             if (v.type == VAL_INT) res = v.data.i;
             else if (v.type == VAL_STR) res = atoi(v.data.s);
+            free(full_name);
             return val_int(res);
+        }
+        if (strcmp(full_name, "toString") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            char buf[64];
+            if (v.type == VAL_INT) {
+                snprintf(buf, sizeof(buf), "%d", v.data.i);
+                free(full_name);
+                return val_str(nr_strdup(buf));
+            } else if (v.type == VAL_FLOAT) {
+                snprintf(buf, sizeof(buf), "%g", v.data.f);
+                free(full_name);
+                return val_str(nr_strdup(buf));
+            } else if (v.type == VAL_BOOL) {
+                free(full_name);
+                return val_str(nr_strdup(v.data.i ? "true" : "false"));
+            } else if (v.type == VAL_STR) {
+                free(full_name);
+                return v;
+            } else if (v.type == VAL_NIL) {
+                free(full_name);
+                return val_str(nr_strdup("nil"));
+            }
+            free(full_name);
+            return val_str(nr_strdup("[Object]"));
         }
         if (strcmp(full_name, "__builtin_obj_keys") == 0) {
             Value v = eval(node->data.call.args[0], env);
@@ -830,10 +938,10 @@ static Value eval_call(AstNode* node, Environment* env) {
                     while(*p == ' ' || *p == ':') p++;
                     if (*p == '"') { 
                         p++; char val[256]; int j=0; while(*p && *p != '"') val[j++] = *p++; val[j] = 0; p++; 
-                        set_field(obj.data.obj, key, val_str(nr_strdup(val))); 
+                        eval_set_field(obj.data.obj, key, val_str(nr_strdup(val))); 
                     } else { 
                         char val[32]; int j=0; while(*p && *p != ',' && *p != ' ' && *p != '}') val[j++] = *p++; val[j] = 0; 
-                        set_field(obj.data.obj, key, val_int(atoi(val))); 
+                        eval_set_field(obj.data.obj, key, val_int(atoi(val))); 
                     }
                 }
                 free(full_name);
@@ -1095,7 +1203,7 @@ Value eval(AstNode* node, Environment* env) {
                 if (idx.data.i < 0 || idx.data.i >= obj.data.arr->count) report_runtime_error(node, env, "BOUNDS", "Array index out of bounds");
                 *obj.data.arr->elements[idx.data.i] = val;
             } else if (obj.type == VAL_OBJ && idx.type == VAL_STR) {
-                set_field(obj.data.obj, idx.data.s, val);
+                eval_set_field(obj.data.obj, idx.data.s, val);
             }
             return val;
         }
@@ -1182,6 +1290,65 @@ Value eval(AstNode* node, Environment* env) {
         }
         case AST_EXPORT: {
             return eval(node->data.func_decl.body, env); 
+        }
+        case AST_NATIVE: {
+            if (node->data.native_stmt.code) {
+                char hash[64];
+                unsigned int h = 0;
+                for (int i=0; node->data.native_stmt.code[i]; i++) h = h * 31 + node->data.native_stmt.code[i];
+                snprintf(hash, sizeof(hash), "native_%u", h);
+
+                char c_file[256];
+                char so_file[256];
+                snprintf(c_file, sizeof(c_file), ".nira/cache/%s.c", hash);
+#ifdef __APPLE__
+                snprintf(so_file, sizeof(so_file), ".nira/cache/%s.dylib", hash);
+#else
+                snprintf(so_file, sizeof(so_file), ".nira/cache/%s.so", hash);
+#endif
+                
+                struct stat st;
+                if (stat(so_file, &st) != 0) {
+                    mkdir(".nira", 0755);
+                    mkdir(".nira/cache", 0755);
+                    FILE* f = fopen(c_file, "w");
+                    if (f) {
+                        fprintf(f, "#include \"evaluator.h\"\n");
+                        for (int i=0; i<node->data.native_stmt.header_count; i++) {
+                            char* h = node->data.native_stmt.headers[i];
+                            if (h[0] == '<' || h[0] == '"') fprintf(f, "#include %s\n", h);
+                            else fprintf(f, "#include \"%s\"\n", h);
+                        }
+                        fprintf(f, "%s\n", node->data.native_stmt.code);
+                        fclose(f);
+                        
+                        char cmd[1024];
+                        char link_flags[512] = "";
+                        for (int i=0; i<node->data.native_stmt.link_count; i++) {
+                            strcat(link_flags, node->data.native_stmt.links[i]);
+                            strcat(link_flags, " ");
+                        }
+#ifdef __APPLE__
+                        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC -Iinclude %s -undefined dynamic_lookup -o %s %s", link_flags, so_file, c_file);
+#else
+                        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC -Iinclude %s -o %s %s", link_flags, so_file, c_file);
+#endif
+                        int res = system(cmd);
+                        if (res != 0) {
+                            report_runtime_error(node, env, "FFI", "Failed to compile native block");
+                            return val_nil();
+                        }
+                    }
+                }
+                
+                void* handle = dlopen(so_file, RTLD_NOW | RTLD_GLOBAL);
+                if (handle) {
+                    if (dl_handle_count < 64) dl_handles[dl_handle_count++] = handle;
+                } else {
+                    report_runtime_error(node, env, "FFI", dlerror());
+                }
+            }
+            return val_nil();
         }
         default:
             return val_nil();

@@ -80,4 +80,11 @@ void env_free(Environment* env);
 
 Value eval(AstNode* node, Environment* env);
 
+// FFI Compatibility Functions
+void* nr_alloc(size_t sz);
+char* nr_strdup(const char* s);
+Value nr_rt_push(Value arr, Value val);
+void set_field(Value obj, const char* key, Value val);
+Value get_field(Value obj, const char* key);
+
 #endif
