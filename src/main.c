@@ -325,10 +325,10 @@ int main(int argc, char *argv[]) {
     char compile_cmd[2048];
 #ifdef __APPLE__
     snprintf(compile_cmd, sizeof(compile_cmd),
-             "clang -w -O3 -o %s %s %s -I/opt/homebrew/include -L/opt/homebrew/lib", bin_path, out_name, codegen_get_links());
+             "clang -w -Ofast -funroll-loops -o %s %s %s -I/opt/homebrew/include -L/opt/homebrew/lib", bin_path, out_name, codegen_get_links());
 #else
     snprintf(compile_cmd, sizeof(compile_cmd),
-             "clang -w -O3 -o %s %s %s", bin_path, out_name, codegen_get_links());
+             "clang -w -Ofast -funroll-loops -o %s %s %s", bin_path, out_name, codegen_get_links());
 #endif
 
     int status = system(compile_cmd);

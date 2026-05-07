@@ -104,19 +104,19 @@ static void print_runtime(FILE *out) {
   fprintf(out,
           "struct Value; typedef struct Value { ValueType type; int length; union { long long i; "
           "double f; char* s; struct { char** keys; struct Value** values; int "
-          "count; int capacity; }* obj; struct { struct Value** elements; int "
+          "count; int capacity; }* obj; struct { struct Value* elements; int "
           "count; int capacity; }* arr; void* func_ptr; } data; } Value;\n\n");
   fprintf(
       out,
       "static inline Value val_nil() { return (Value){.type = VAL_NIL, .length = 0}; }\n"
-      "static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .length = 0, .data.i = i}; }\n"
+      "#define val_int(i) ((Value){.type = VAL_INT, .length = 0, .data.i = (i)})\n"
       "static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .length = 0, .data.f = f}; }\n"
       "static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .length = 0, .data.i = b ? 1 : 0}; }\n"
-      "static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .length = s ? strlen(s) : 0, .data.s = (char*)s}; }\n"
+      "#define val_str(s) ({ const char* _s = (s); (Value){.type = VAL_STR, .length = _s ? strlen(_s) : 0, .data.s = (char*)_s}; })\n"
       "static inline Value val_str_len(const char* s, int len) { return (Value){.type = VAL_STR, .length = len, .data.s = (char*)s}; }\n"
       "Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .length = 0, .data.s = nr_strdup(m)}; }\n"
       "Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = "
-      "ptr}; }\nbool is_truthy(Value v) { if (v.type == VAL_NIL) return false; "
+      "ptr}; }\n#define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))\nbool is_truthy_unused(Value v) { if (v.type == VAL_NIL) return false; "
       "if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if "
       "(v.type == VAL_FLOAT) return v.data.f != 0.0; return true; }\n\n");
   fprintf(
@@ -156,11 +156,11 @@ static void print_runtime(FILE *out) {
       "Value nr_rt_push(Value arr, Value val) { if (arr.type != VAL_ARR) "
       "return val_nil(); if (arr.data.arr->count >= arr.data.arr->capacity) { "
       "int old_cap = arr.data.arr->capacity; arr.data.arr->capacity *= 2; "
-      "Value** new_el = nr_alloc(sizeof(Value*) * arr.data.arr->capacity); "
-      "memcpy(new_el, arr.data.arr->elements, sizeof(Value*)*old_cap); "
+      "Value* new_el = nr_alloc(sizeof(Value) * arr.data.arr->capacity); "
+      "memcpy(new_el, arr.data.arr->elements, sizeof(Value)*old_cap); "
       "arr.data.arr->elements = new_el; } "
-      "arr.data.arr->elements[arr.data.arr->count] = nr_alloc(sizeof(Value)); "
-      "*arr.data.arr->elements[arr.data.arr->count] = val; "
+      " "
+      "arr.data.arr->elements[arr.data.arr->count] = val; "
       "arr.data.arr->count++; return val; }\n");
   fprintf(out,
           "Value nr_rt_obj_keys(Value obj) { if (obj.type != VAL_OBJ) return "
@@ -174,14 +174,14 @@ static void print_runtime(FILE *out) {
       out,
       "Value nr_rt_at(Value v, Value idx) { if (v.type == VAL_ARR && idx.type "
       "== VAL_INT) { int i = idx.data.i; if (i < 0 || i >= v.data.arr->count) "
-      "return val_nil(); return *v.data.arr->elements[i]; } if (v.type == "
+      "return val_nil(); return v.data.arr->elements[i]; } if (v.type == "
       "VAL_OBJ && idx.type == VAL_STR) return get_field(v, idx.data.s); if "
       "(v.type == VAL_STR && idx.type == VAL_INT) { int i = idx.data.i; if (i "
       "< 0 || i >= (int)strlen(v.data.s)) return val_nil(); char s[2] = "
       "{v.data.s[i], 0}; return val_str(s); } return val_nil(); }\n");
   fprintf(out, "Value nr_rt_set_at(Value v, Value idx, Value val) { if (v.type "
                "== VAL_ARR && idx.type == VAL_INT) { int i = idx.data.i; if (i "
-               ">= 0 && i < v.data.arr->count) *v.data.arr->elements[i] = val; "
+               ">= 0 && i < v.data.arr->count) v.data.arr->elements[i] = val; "
                "} else if (v.type == VAL_OBJ && idx.type == VAL_STR) "
                "set_field(v, idx.data.s, val); return val; }\n");
   fprintf(out, "Value nr_rt_to_int(Value v) { if (v.type == VAL_INT) return v; "
@@ -393,7 +393,23 @@ static void print_runtime(FILE *out) {
       "i < v.data.obj->count-1 ? \",\" : \"\"); } char* old = res; res = "
       "nr_alloc(strlen(old) + 2); sprintf(res, \"%%s}\", old); return res; } "
       "return nr_strdup(\"null\"); }\n");
-  fprintf(out, "Value nr_rt_json_encode(Value v) { return "
+  fprintf(out, "#define NR_STR_CONCAT(l, r) ({ \\n"
+          "    Value _l = (l); Value _r = (r); \\n"
+          "    int _ll = _l.length; int _lr = _r.length; char* _sl = _l.data.s; char* _sr = _r.data.s; \\n"
+          "    Value _res; \\n"
+          "    if (_lr == 1 && nr_arena && (char*)nr_arena->current == _sl + ((_ll + 1 + 7) & ~7)) { \\n"
+          "        _sl[_ll] = _sr[0]; _sl[_ll + 1] = 0; nr_arena->current += ((_ll + 2 + 7) & ~7) - ((_ll + 1 + 7) & ~7); \\n"
+          "        _res = (Value){.type = VAL_STR, .length = _ll + 1, .data.s = _sl}; \\n"
+          "    } else { \\n"
+          "        int _oas = (_ll + 1 + 7) & ~7; int _nas = (_ll + _lr + 1 + 7) & ~7; \\n"
+          "        if (nr_arena && (char*)nr_arena->current == _sl + _oas && nr_arena->current + (_nas - _oas) <= nr_arena->heap_end) { \\n"
+          "            memcpy(_sl + _ll, _sr, _lr); _sl[_ll + _lr] = 0; nr_arena->current += (_nas - _oas); \\n"
+          "            _res = (Value){.type = VAL_STR, .length = _ll + _lr, .data.s = _sl}; \\n"
+          "        } else { \\n"
+          "            char* _p = nr_alloc(_ll + _lr + 1); memcpy(_p, _sl, _ll); memcpy(_p + _ll, _sr, _lr); _p[_ll + _lr] = 0; \\n"
+          "            _res = (Value){.type = VAL_STR, .length = _ll + _lr, .data.s = _p}; \\n"
+          "        } \\n"
+          "    } _res; })\nValue nr_rt_json_encode(Value v) { return "
                "val_str(val_to_json(v)); }\n\n");
 
   fprintf(out, "Value nr_rt_json_decode(Value s) {\n");
@@ -1021,7 +1037,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
             fprintf(out, ")");
         }
     } else {
-        fprintf(out, "is_truthy(");
+        fprintf(out, "IS_TRUTHY(");
         codegen_c_node(node->data.if_stmt.condition, out);
         fprintf(out, ")");
     }
@@ -1055,7 +1071,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
             fprintf(out, ")");
         }
     } else {
-        fprintf(out, "is_truthy(");
+        fprintf(out, "IS_TRUTHY(");
         codegen_c_node(node->data.while_stmt.condition, out);
         fprintf(out, ")");
     }
@@ -1220,7 +1236,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
   case AST_INDEX: {
     int it = get_static_type(node->data.index.index);
     if (it == VAL_INT) {
-        fprintf(out, "(*");
+        fprintf(out, "(");
         codegen_c_node(node->data.index.object, out);
         fprintf(out, ".data.arr->elements[");
         codegen_c_node(node->data.index.index, out);
@@ -1236,7 +1252,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
   case AST_INDEX_ASSIGN: {
     int it = get_static_type(node->data.index_assign.index);
     if (it == VAL_INT) {
-        fprintf(out, "(*");
+        fprintf(out, "(");
         codegen_c_node(node->data.index_assign.object, out);
         fprintf(out, ".data.arr->elements[");
         codegen_c_node(node->data.index_assign.index, out);
@@ -1592,7 +1608,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ")");
     } else if (op == OP_NEQ) {
-      fprintf(out, "val_bool(!is_truthy(nr_rt_eq(");
+      fprintf(out, "val_bool(!IS_TRUTHY(nr_rt_eq(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ", ");
       codegen_c_node(node->data.binary.right, out);
@@ -1616,17 +1632,17 @@ void codegen_c_node(AstNode *node, FILE *out) {
     } else if (op == OP_AND) {
       fprintf(out, "({ Value _l = ");
       codegen_c_node(node->data.binary.left, out);
-      fprintf(out, "; is_truthy(_l) ? ");
+      fprintf(out, "; IS_TRUTHY(_l) ? ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, " : _l; })");
     } else if (op == OP_OR) {
       fprintf(out, "({ Value _l = ");
       codegen_c_node(node->data.binary.left, out);
-      fprintf(out, "; is_truthy(_l) ? _l : ");
+      fprintf(out, "; IS_TRUTHY(_l) ? _l : ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, "; })");
     } else if (op == OP_NOT) {
-      fprintf(out, "val_bool(!is_truthy(");
+      fprintf(out, "val_bool(!IS_TRUTHY(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, "))");
     } else if (op == OP_MOD) {

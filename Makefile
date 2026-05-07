@@ -1,5 +1,5 @@
 CC = clang
-CFLAGS = -Wall -Wextra -g -Iinclude
+CFLAGS = -Wall -Wextra -Ofast -funroll-loops -Iinclude
 SRC_DIR = src
 OBJ_DIR = obj
 TARGET = nira
