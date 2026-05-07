@@ -34,7 +34,7 @@ typedef struct Array {
 typedef struct Value {
     ValueType type;
     union {
-        int i;
+        long long i;
         double f;
         char* s;
         Object* obj;
@@ -66,7 +66,7 @@ typedef struct Environment {
     const char* filename;
 } Environment;
 
-Value val_int(int i);
+Value val_int(long long i);
 Value val_float(double f);
 Value val_str(char* s);
 Value val_obj();

@@ -8,7 +8,8 @@ AstNode* ast_new(AstNodeType type, Token t) {
     node->line = t.line;
     node->column = t.column;
     memset(&node->data, 0, sizeof(node->data));
-    if (type == AST_VAR_REF || type == AST_ASSIGN) node->data.var_ref.slot = -1; // Shared offset for slot in union
+    if (type == AST_VAR_REF || type == AST_ASSIGN) node->data.var_ref.slot = -1;
+    if (type == AST_CALL) node->data.call.obj_slot = -1;
     return node;
 }
 

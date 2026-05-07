@@ -104,14 +104,14 @@ static void print_runtime(FILE *out) {
   fprintf(out, "char* nr_strdup(const char* s) { char* d = "
                "nr_alloc(strlen(s)+1); strcpy(d, s); return d; }\n");
   fprintf(out,
-          "struct Value; typedef struct Value { ValueType type; union { int i; "
+          "struct Value; typedef struct Value { ValueType type; union { long long i; "
           "double f; char* s; struct { char** keys; struct Value** values; int "
           "count; int capacity; }* obj; struct { struct Value** elements; int "
           "count; int capacity; }* arr; void* func_ptr; } data; } Value;\n\n");
   fprintf(
       out,
       "static inline Value val_nil() { return (Value){.type = VAL_NIL}; }\n"
-      "static inline Value val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }\n"
+      "static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }\n"
       "static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }\n"
       "static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }\n"
       "Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = nr_strdup(s)}; }\n"
@@ -190,7 +190,7 @@ static void print_runtime(FILE *out) {
                "NULL, 10)); return val_int(0); }\n");
   fprintf(
       out,
-      "void nr_rt_print(Value v) { if (v.type == VAL_INT) printf(\"%%d\\n\", "
+      "void nr_rt_print(Value v) { if (v.type == VAL_INT) printf(\"%%lld\\n\", "
       "v.data.i); else if (v.type == VAL_BOOL) printf(\"%%s\\n\", v.data.i ? "
       "\"true\" : \"false\"); else if (v.type == VAL_STR) printf(\"%%s\\n\", "
       "v.data.s); else if (v.type == VAL_ARR) printf(\"[Array]\\n\"); else if "
@@ -201,15 +201,16 @@ static void print_runtime(FILE *out) {
                "val_int(v.data.arr->count); if (v.type == VAL_STR) return "
                "val_int(strlen(v.data.s)); return val_int(0); }\n");
 
-  fprintf(out, "Value nr_rt_add(Value l, Value r) {\n");
+  fprintf(out, "static inline Value nr_rt_add(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return val_int(l.data.i + r.data.i);\n");
   fprintf(out, "  if (l.type == VAL_STR || r.type == VAL_STR) {\n");
   fprintf(out, "    char buf_l[64], buf_r[64]; char *sl, *sr;\n");
   fprintf(out, "    if (l.type == VAL_STR) sl = l.data.s; else if (l.type == "
-               "VAL_INT) { snprintf(buf_l, 64, \"%%d\", l.data.i); sl = buf_l; "
+               "VAL_INT) { snprintf(buf_l, 64, \"%%lld\", l.data.i); sl = buf_l; "
                "} else if (l.type == VAL_FLOAT) { snprintf(buf_l, 64, \"%%g\", "
                "l.data.f); sl = buf_l; } else sl = \"nil\";\n");
   fprintf(out, "    if (r.type == VAL_STR) sr = r.data.s; else if (r.type == "
-               "VAL_INT) { snprintf(buf_r, 64, \"%%d\", r.data.i); sr = buf_r; "
+               "VAL_INT) { snprintf(buf_r, 64, \"%%lld\", r.data.i); sr = buf_r; "
                "} else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, \"%%g\", "
                "r.data.f); sr = buf_r; } else sr = \"nil\";\n");
   fprintf(out, "    char* res = nr_alloc(strlen(sl) + strlen(sr) + 1); "
@@ -227,7 +228,8 @@ static void print_runtime(FILE *out) {
   fprintf(out, "  return val_int(l.data.i + r.data.i);\n");
   fprintf(out, "}\n");
 
-  fprintf(out, "Value nr_rt_eq(Value l, Value r) {\n");
+  fprintf(out, "static inline Value nr_rt_eq(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return val_bool(l.data.i == r.data.i);\n");
   fprintf(out, "  if (l.type == r.type) {\n");
   fprintf(out, "    if (l.type == VAL_NIL) return val_bool(1);\n");
   fprintf(out, "    if (l.type == VAL_STR) return val_bool(strcmp(l.data.s, "
@@ -243,12 +245,18 @@ static void print_runtime(FILE *out) {
                "VAL_INT || r.type == VAL_FLOAT)) {\n");
   fprintf(
       out,
-      "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n  "
-      "  double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+      "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n"
+      "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
   fprintf(out, "    return val_bool(lv == rv);\n");
   fprintf(out, "  }\n");
-  fprintf(out, "  return val_bool(0);\n");
-  fprintf(out, "}\n\n");
+  fprintf(out, "  return val_bool(0);\n}\n\n");
+  fprintf(out, "static inline Value nr_rt_lt(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return val_bool(l.data.i < r.data.i);\n");
+  fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
+  fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n");
+  fprintf(out, "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+  fprintf(out, "    return val_bool(lv < rv);\n");
+  fprintf(out, "  }\n  return val_bool(0);\n}\n");
 
   fprintf(out, "static int is_safe_path(const char* path) { if (!path) return "
                "0; if (strstr(path, \"..\")) return 0; return 1; }\n");
@@ -307,7 +315,7 @@ static void print_runtime(FILE *out) {
           "Value nr_rt_args() { Value a = val_arr(); for(int i=0; i<nr_argc; "
           "i++) nr_rt_push(a, val_str(nr_argv[i])); return a; }\n");
   fprintf(out, "Value nr_rt_to_string(Value v) { char buf[64]; if (v.type == "
-               "VAL_INT) sprintf(buf, \"%%d\", v.data.i); else if (v.type == "
+               "VAL_INT) sprintf(buf, \"%%lld\", v.data.i); else if (v.type == "
                "VAL_FLOAT) sprintf(buf, \"%%g\", v.data.f); else if (v.type == "
                "VAL_BOOL) strcpy(buf, v.data.i ? \"true\" : \"false\"); else "
                "if (v.type == VAL_STR) return v; else if (v.type == VAL_NIL) "
@@ -335,7 +343,7 @@ static void print_runtime(FILE *out) {
   fprintf(
       out,
       "char* val_to_json(Value v) { if (v.type == VAL_INT) { char* b = "
-      "nr_alloc(32); sprintf(b, \"%%d\", v.data.i); return b; } if (v.type == "
+      "nr_alloc(32); sprintf(b, \"%%lld\", v.data.i); return b; } if (v.type == "
       "VAL_STR) { char* b = nr_alloc(strlen(v.data.s) + 3); sprintf(b, "
       "\"\\\"%%s\\\"\", v.data.s); return b; } if (v.type == VAL_BOOL) return "
       "nr_strdup(v.data.i ? \"true\" : \"false\"); if (v.type == VAL_ARR) { "
@@ -392,7 +400,7 @@ static void print_runtime(FILE *out) {
                "close(server_fd); return val_nil(); }\n");
   fprintf(
       out,
-      "  printf(\"HTTP Server listening on port %%d...\\n\", port.data.i);\n");
+      "  printf(\"HTTP Server listening on port %%lld...\\n\", port.data.i);\n");
   fprintf(out, "  while(1) {\n    void* cp = nr_checkpoint();\n    new_socket "
                "= accept(server_fd, (struct sockaddr *)&address, "
                "(socklen_t*)&addrlen);\n");
@@ -1038,7 +1046,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
     break;
   }
   case AST_LITERAL_INT:
-    fprintf(out, "val_int(%d)", node->data.int_val);
+    fprintf(out, "val_int(%lld)", node->data.int_val);
     break;
   case AST_LITERAL_FLOAT:
     fprintf(out, "val_float(%g)", node->data.float_val);
@@ -1060,7 +1068,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
     break;
   }
   case AST_LITERAL_BOOL:
-    fprintf(out, "val_bool(%d)", node->data.int_val);
+    fprintf(out, "val_bool(%lld)", node->data.int_val);
     break;
   case AST_LITERAL_NULL:
     fprintf(out, "val_nil()");
@@ -1390,7 +1398,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
       if (is_function(n)) {
         fprintf(out, "nr_%s(val_nil()", n);
       } else {
-        fprintf(out, "(void)({ Value _f = ");
+        fprintf(out, "({ Value _f = ");
         if (current_pref) {
           char p[256];
           sprintf(p, "%s_%s", current_pref, n);
@@ -1477,23 +1485,22 @@ void codegen_c_node(AstNode *node, FILE *out) {
       fprintf(out, ".data.i, (double)");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ".data.i))");
-    } else {
-      const char* op_str = "";
-      switch(op) {
-        case OP_SUB: op_str = "-"; break;
-        case OP_MUL: op_str = "*"; break;
-        case OP_DIV: op_str = "/"; break;
-        case OP_LT:  op_str = "<"; break;
-        case OP_GT:  op_str = ">"; break;
-        case OP_LE:  op_str = "<="; break;
-        case OP_GE:  op_str = ">="; break;
-        default: break;
-      }
+    } else if (op == OP_SUB || op == OP_MUL || op == OP_DIV) {
+      const char* op_str = (op == OP_SUB) ? "-" : (op == OP_MUL) ? "*" : "/";
       fprintf(out, "val_int(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ".data.i %s ", op_str);
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ".data.i)");
+    } else if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE) {
+      const char* op_str = (op == OP_LT) ? "<" : (op == OP_GT) ? ">" : (op == OP_LE) ? "<=" : ">=";
+      fprintf(out, "val_bool(");
+      codegen_c_node(node->data.binary.left, out);
+      fprintf(out, ".data.i %s ", op_str);
+      codegen_c_node(node->data.binary.right, out);
+      fprintf(out, ".data.i)");
+    } else {
+      fprintf(out, "val_nil()");
     }
     break;
   }

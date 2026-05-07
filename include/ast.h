@@ -88,7 +88,7 @@ typedef struct AstNode {
         } var_ref;
 
         // Literals
-        int int_val;
+        long long int_val;
         double float_val;
         char* str_val;
 
@@ -103,6 +103,7 @@ typedef struct AstNode {
             struct AstNode** args;
             int arg_count;
             struct AstNode* cached_decl; // [NEW] Pointer to the resolved function
+            int obj_slot; // [NEW] Slot index for the object in a dot call
         } call;
 
         // Binary

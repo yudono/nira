@@ -77,10 +77,33 @@ static void nr_resolve_node(AstNode* node, ResolverScope* scope) {
             nr_resolve_node(node->data.binary.left, scope);
             nr_resolve_node(node->data.binary.right, scope);
             break;
-        case AST_CALL:
+        case AST_CALL: {
+            char* dot = strchr(node->data.call.name, '.');
+            if (dot) {
+                int len = dot - node->data.call.name;
+                char obj_name[64];
+                if (len < 63) {
+                    strncpy(obj_name, node->data.call.name, len);
+                    obj_name[len] = '\0';
+                    
+                    // Resolve obj_name to slot
+                    ResolverScope* s = scope;
+                    while (s) {
+                        for (int i = 0; i < s->count; i++) {
+                            if (strcmp(obj_name, s->vars[i]) == 0) {
+                                if (s == scope) node->data.call.obj_slot = i;
+                                break;
+                            }
+                        }
+                        if (node->data.call.obj_slot != -1) break;
+                        s = s->parent;
+                    }
+                }
+            }
             for (int i = 0; i < node->data.call.arg_count; i++)
                 nr_resolve_node(node->data.call.args[i], scope);
             break;
+        }
         case AST_IF:
             nr_resolve_node(node->data.if_stmt.condition, scope);
             nr_resolve_node(node->data.if_stmt.then_branch, scope);
@@ -97,7 +120,31 @@ static void nr_resolve_node(AstNode* node, ResolverScope* scope) {
             nr_resolve_node(node->data.while_stmt.condition, scope);
             nr_resolve_node(node->data.while_stmt.body, scope);
             break;
-        // ... more nodes as needed ...
+        case AST_INDEX:
+            nr_resolve_node(node->data.index.object, scope);
+            nr_resolve_node(node->data.index.index, scope);
+            break;
+        case AST_INDEX_ASSIGN:
+            nr_resolve_node(node->data.index_assign.object, scope);
+            nr_resolve_node(node->data.index_assign.index, scope);
+            nr_resolve_node(node->data.index_assign.value, scope);
+            break;
+        case AST_ARRAY:
+            for (int i = 0; i < node->data.array.count; i++)
+                nr_resolve_node(node->data.array.elements[i], scope);
+            break;
+        case AST_OBJECT: {
+            AstField* f = node->data.object.fields;
+            while (f) {
+                nr_resolve_node(f->value, scope);
+                f = f->next;
+            }
+            break;
+        }
+        case AST_DESTRUCTURING:
+            nr_resolve_node(node->data.destruct.value, scope);
+            if (node->data.destruct.target) nr_resolve_node(node->data.destruct.target, scope);
+            break;
         default: break;
     }
 }
@@ -140,7 +187,7 @@ void nr_eval_add_include_path(const char* path) {
 
 // --- Value Constructors ---
 
-Value val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }
+Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }
 Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
 Value val_str(char* s) { return (Value){.type = VAL_STR, .data.s = s ? nr_strdup(s) : nr_strdup("")}; }
 Value val_nil() { return (Value){.type = VAL_NIL}; }
@@ -412,7 +459,7 @@ static char* read_file_internal(const char* path) {
 
 char* val_to_json_internal(Value v) {
     if (v.type == VAL_INT) {
-        char* b = nr_malloc(32); sprintf(b, "%d", v.data.i); return b;
+        char* b = nr_malloc(32); sprintf(b, "%lld", v.data.i); return b;
     }
     if (v.type == VAL_STR) {
         char* b = nr_malloc(strlen(v.data.s) + 3); sprintf(b, "\"%s\"", v.data.s); return b;
@@ -594,7 +641,13 @@ static Value eval_call(AstNode* node, Environment* env) {
         *dot = '\0';
         char* obj_name = full_name;
         char* field_name = dot + 1;
-        Value obj = env_get(env, obj_name);
+        Value obj = val_nil();
+        
+        if (node->data.call.obj_slot != -1 && env->slots) {
+            obj = env->slots[node->data.call.obj_slot];
+        } else {
+            obj = env_get(env, obj_name);
+        }
         
         // Handle Array methods
         if (obj.type == VAL_ARR) {
@@ -692,7 +745,7 @@ static Value eval_call(AstNode* node, Environment* env) {
             for (int i=0; i<node->data.call.arg_count; i++) {
                 Value arg = eval(node->data.call.args[i], env);
                 if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-                if (arg.type == VAL_INT) printf("%d\n", arg.data.i);
+                if (arg.type == VAL_INT) printf("%lld\n", arg.data.i);
                 else if (arg.type == VAL_FLOAT) printf("%g\n", arg.data.f);
                 else if (arg.type == VAL_BOOL) printf("%s\n", arg.data.i ? "true" : "false");
                 else if (arg.type == VAL_STR) printf("%s\n", arg.data.s);
@@ -936,7 +989,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                 address.sin_port = htons(port.data.i);
                 if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
                     char err_msg[256];
-                    snprintf(err_msg, sizeof(err_msg), "Could not bind to port %d: %s", port.data.i, strerror(errno));
+                    snprintf(err_msg, sizeof(err_msg), "Could not bind to port %lld: %s", port.data.i, strerror(errno));
                     report_runtime_error(node, env, "NETWORK", err_msg);
                     close(server_fd);
                     free(full_name);
@@ -947,7 +1000,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                     close(server_fd);
                     return val_nil();
                 }
-                printf("HTTP Server listening on port %d...\n", port.data.i);
+                printf("HTTP Server listening on port %lld...\n", port.data.i);
                 while(1) {
                     ArenaBlock* checkpoint = nr_arena_checkpoint();
                     new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
@@ -1006,7 +1059,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                                 Value* hv = h.data.obj->values[i];
                                 char* hs = "";
                                 if (hv->type == VAL_STR) hs = hv->data.s;
-                                else if (hv->type == VAL_INT) { snprintf(line, sizeof(line), "%d", hv->data.i); hs = nr_strdup(line); }
+                                else if (hv->type == VAL_INT) { snprintf(line, sizeof(line), "%lld", hv->data.i); hs = nr_strdup(line); }
                                 
                                 snprintf(line, sizeof(line), "%s: %s\r\n", h.data.obj->keys[i], hs);
                                 if (strlen(headers_str) + strlen(line) < sizeof(headers_str) - 1) {
@@ -1065,7 +1118,7 @@ static Value eval_call(AstNode* node, Environment* env) {
             if (v.type == VAL_RETURN) v = *v.data.return_val;
             char buf[64];
             if (v.type == VAL_INT) {
-                snprintf(buf, sizeof(buf), "%d", v.data.i);
+                snprintf(buf, sizeof(buf), "%lld", v.data.i);
                 free(full_name);
                 return val_str(nr_strdup(buf));
             } else if (v.type == VAL_FLOAT) {
@@ -1393,7 +1446,7 @@ Value eval(AstNode* node, Environment* env) {
                         default: break;
                     }
                 } else {
-                    int il = (int)l; int ir = (int)r;
+                    long long il = (long long)l; long long ir = (long long)r;
                     switch (op) {
                         case OP_ADD: return (Value){.type = VAL_INT, .data.i = il + ir};
                         case OP_SUB: return (Value){.type = VAL_INT, .data.i = il - ir};
