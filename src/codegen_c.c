@@ -87,8 +87,12 @@ static void print_runtime(FILE *out) {
           "nr_argc; char** nr_argv;\n");
   fprintf(out, "typedef enum { VAL_NIL, VAL_INT, VAL_FLOAT, VAL_STR, VAL_OBJ, "
                "VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_ERROR } ValueType;\n");
-  fprintf(out, "typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;\n");
-  fprintf(out, "void* nr_alloc(size_t sz) { sz = (sz + 7) & ~7; if (nr_arena->current + sz > nr_arena->heap_end) exit(1); void* p = nr_arena->current; nr_arena->current += sz; return p; }\n");
+  fprintf(out, "typedef struct ArenaBlock { char* heap; struct ArenaBlock* next; } ArenaBlock;\n"
+               "typedef struct { char* heap_start; char* heap_end; char* current; ArenaBlock* old_blocks; } Arena; Arena* nr_arena;\n");
+  fprintf(out, "void* nr_alloc(size_t sz) { sz = (sz + 7) & ~7; if (nr_arena->current + sz > nr_arena->heap_end) { "
+               "ArenaBlock* old = malloc(sizeof(ArenaBlock)); old->heap = nr_arena->heap_start; old->next = nr_arena->old_blocks; nr_arena->old_blocks = old; "
+               "size_t hs = 1024*1024*1024; if(sz > hs) hs = sz + 1024; nr_arena->heap_start = malloc(hs); nr_arena->heap_end = nr_arena->heap_start + hs; nr_arena->current = nr_arena->heap_start; } "
+               "void* p = nr_arena->current; nr_arena->current += sz; return p; }\n");
   fprintf(out, "void* nr_checkpoint() { return nr_arena->current; }\n");
   fprintf(
       out,
@@ -1703,7 +1707,7 @@ void codegen_c_program(AstNode *node, FILE *out) {
     fprintf(out, "int main(int argc, char** argv) {\n");
     fprintf(out, "  size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); "
                "nr_arena->heap_start = malloc(heap_size); nr_arena->heap_end = nr_arena->heap_start + heap_size; "
-               "nr_arena->current = nr_arena->heap_start;\n");
+               "nr_arena->current = nr_arena->heap_start; nr_arena->old_blocks = NULL;\n");
     fprintf(out, "  srand(time(NULL));\n  nr_argc = argc; nr_argv = argv;\n  "
                  "Value self = val_nil(); (void)self;\n");
     for (int i = 0; i < global_var_count; i++)
@@ -1711,7 +1715,8 @@ void codegen_c_program(AstNode *node, FILE *out) {
     current_pref = NULL;
     codegen_c_node(node, out);
     codegen_c_node(m_node->data.func_decl.body, out);
-    fprintf(out, "  free(nr_arena->heap_start); free(nr_arena);\n");
+    fprintf(out, "  ArenaBlock* curr = nr_arena->old_blocks; while(curr) { ArenaBlock* next = curr->next; free(curr->heap); free(curr); curr = next; } "
+                 "free(nr_arena->heap_start); free(nr_arena);\n");
     fprintf(out, "  return 0; \n}\n");
   }
 }

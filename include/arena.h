@@ -4,8 +4,7 @@
 #include <stddef.h>
 
 typedef struct ArenaBlock {
-    void* ptr;
-    size_t size;
+    char* heap;
     struct ArenaBlock* next;
 } ArenaBlock;
 
@@ -13,6 +12,7 @@ typedef struct {
     char* heap_start;
     char* heap_end;
     char* current;
+    ArenaBlock* old_blocks;
 } Arena;
 
 Arena* arena_new();
