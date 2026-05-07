@@ -1,5 +1,6 @@
 #include "../include/evaluator.h"
 #include "../include/parser.h"
+#include "../include/arena.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -20,12 +21,13 @@ void set_field(Object* obj, const char* key, Value val) {
         }
     }
     if (obj->count >= obj->capacity) {
+        int old_cap = obj->capacity;
         obj->capacity *= 2;
-        obj->keys = realloc(obj->keys, sizeof(char*) * obj->capacity);
-        obj->values = realloc(obj->values, sizeof(Value*) * obj->capacity);
+        obj->keys = nr_realloc(obj->keys, sizeof(char*) * old_cap, sizeof(char*) * obj->capacity);
+        obj->values = nr_realloc(obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * obj->capacity);
     }
-    obj->keys[obj->count] = strdup(key);
-    obj->values[obj->count] = malloc(sizeof(Value));
+    obj->keys[obj->count] = nr_strdup(key);
+    obj->values[obj->count] = nr_malloc(sizeof(Value));
     *obj->values[obj->count] = val;
     obj->count++;
 }
@@ -36,22 +38,23 @@ static int include_path_count = 0;
 
 void nr_eval_add_include_path(const char* path) {
     if (include_path_count < 16) {
-        include_paths[include_path_count++] = strdup(path);
+        include_paths[include_path_count++] = nr_strdup(path);
     }
 }
 
 // --- Value Constructors ---
 
 Value val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }
-Value val_str(char* s) { return (Value){.type = VAL_STR, .data.s = s ? strdup(s) : strdup("")}; }
+Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
+Value val_str(char* s) { return (Value){.type = VAL_STR, .data.s = s ? nr_strdup(s) : nr_strdup("")}; }
 Value val_nil() { return (Value){.type = VAL_NIL}; }
 Value val_bool(int b) { return (Value){.type = VAL_BOOL, .data.i = b}; }
-Value val_error(char* msg) { return (Value){.type = VAL_ERROR, .data.s = msg ? strdup(msg) : strdup("error")}; }
+Value val_error(char* msg) { return (Value){.type = VAL_ERROR, .data.s = msg ? nr_strdup(msg) : nr_strdup("error")}; }
 
 Value val_return(Value v) {
     Value res;
     res.type = VAL_RETURN;
-    res.data.return_val = malloc(sizeof(Value));
+    res.data.return_val = nr_malloc(sizeof(Value));
     *res.data.return_val = v;
     return res;
 }
@@ -59,21 +62,21 @@ Value val_return(Value v) {
 Value val_obj() {
     Value v;
     v.type = VAL_OBJ;
-    v.data.obj = malloc(sizeof(Object));
+    v.data.obj = nr_malloc(sizeof(Object));
     v.data.obj->count = 0;
     v.data.obj->capacity = 16;
-    v.data.obj->keys = malloc(sizeof(char*) * 16);
-    v.data.obj->values = malloc(sizeof(Value*) * 16);
+    v.data.obj->keys = nr_malloc(sizeof(char*) * 16);
+    v.data.obj->values = nr_malloc(sizeof(Value*) * 16);
     return v;
 }
 
 Value val_arr() {
     Value v;
     v.type = VAL_ARR;
-    v.data.arr = malloc(sizeof(Array));
+    v.data.arr = nr_malloc(sizeof(Array));
     v.data.arr->count = 0;
     v.data.arr->capacity = 16;
-    v.data.arr->elements = malloc(sizeof(Value*) * 16);
+    v.data.arr->elements = nr_malloc(sizeof(Value*) * 16);
     return v;
 }
 
@@ -84,7 +87,7 @@ Value val_func(AstNode* decl, Environment* closure) {
 // --- Environment ---
 
 Environment* env_new(Environment* parent) {
-    Environment* env = malloc(sizeof(Environment));
+    Environment* env = nr_malloc(sizeof(Environment));
     env->vars = NULL;
     env->parent = parent;
     env->source = parent ? parent->source : NULL;
@@ -94,8 +97,8 @@ Environment* env_new(Environment* parent) {
 
 void env_define(Environment* env, char* name, Value val) {
     if (!name) return;
-    Variable* v = malloc(sizeof(Variable));
-    v->name = strdup(name);
+    Variable* v = nr_malloc(sizeof(Variable));
+    v->name = nr_strdup(name);
     v->value = val;
     v->next = env->vars;
     env->vars = v;
@@ -174,7 +177,7 @@ static char* read_file_internal(const char* path) {
     fseek(file, 0L, SEEK_END);
     size_t fileSize = ftell(file);
     rewind(file);
-    char* buffer = (char*)malloc(fileSize + 1);
+    char* buffer = (char*)nr_malloc(fileSize + 1);
     size_t bytesRead = fread(buffer, sizeof(char), fileSize, file);
     buffer[bytesRead] = '\0';
     fclose(file);
@@ -183,37 +186,35 @@ static char* read_file_internal(const char* path) {
 
 char* val_to_json_internal(Value v) {
     if (v.type == VAL_INT) {
-        char* b = malloc(32); sprintf(b, "%d", v.data.i); return b;
+        char* b = nr_malloc(32); sprintf(b, "%d", v.data.i); return b;
     }
     if (v.type == VAL_STR) {
-        char* b = malloc(strlen(v.data.s) + 3); sprintf(b, "\"%s\"", v.data.s); return b;
+        char* b = nr_malloc(strlen(v.data.s) + 3); sprintf(b, "\"%s\"", v.data.s); return b;
     }
-    if (v.type == VAL_BOOL) return strdup(v.data.i ? "true" : "false");
+    if (v.type == VAL_BOOL) return nr_strdup(v.data.i ? "true" : "false");
     if (v.type == VAL_ARR) {
-        char* res = strdup("[");
+        char* res = nr_strdup("[");
         for (int i=0; i<v.data.arr->count; i++) {
             char* item = val_to_json_internal(*v.data.arr->elements[i]);
             char* old = res;
-            res = malloc(strlen(old) + strlen(item) + 3);
+            res = nr_malloc(strlen(old) + strlen(item) + 3);
             sprintf(res, "%s%s%s", old, item, i < v.data.arr->count-1 ? "," : "");
-            free(old); free(item);
         }
-        char* old = res; res = malloc(strlen(old) + 2); sprintf(res, "%s]", old); free(old);
+        char* old = res; res = nr_malloc(strlen(old) + 2); sprintf(res, "%s]", old);
         return res;
     }
     if (v.type == VAL_OBJ) {
-        char* res = strdup("{");
+        char* res = nr_strdup("{");
         for (int i=0; i<v.data.obj->count; i++) {
             char* val = val_to_json_internal(*v.data.obj->values[i]);
             char* old = res;
-            res = malloc(strlen(old) + strlen(v.data.obj->keys[i]) + strlen(val) + 6);
+            res = nr_malloc(strlen(old) + strlen(v.data.obj->keys[i]) + strlen(val) + 6);
             sprintf(res, "%s\"%s\":%s%s", old, v.data.obj->keys[i], val, i < v.data.obj->count-1 ? "," : "");
-            free(old); free(val);
         }
-        char* old = res; res = malloc(strlen(old) + 2); sprintf(res, "%s}", old); free(old);
+        char* old = res; res = nr_malloc(strlen(old) + 2); sprintf(res, "%s}", old);
         return res;
     }
-    return strdup("null");
+    return nr_strdup("null");
 }
 
 static Value get_dot_value(Value obj, char* field) {
@@ -226,9 +227,12 @@ static Value get_dot_value(Value obj, char* field) {
     if (obj.type != VAL_OBJ || !field) return val_nil();
     for (int i=0; i<obj.data.obj->count; i++) {
         if (obj.data.obj->keys[i] && strcmp(obj.data.obj->keys[i], field) == 0) {
-            return *obj.data.obj->values[i];
+            Value res = *obj.data.obj->values[i];
+            // printf("Found field %s: type=%d\n", field, res.type);
+            return res;
         }
     }
+    // printf("Field %s not found in object with %d fields\n", field, obj.data.obj->count);
     return val_nil();
 }
 
@@ -236,6 +240,13 @@ static int is_truthy(Value v) {
     if (v.type == VAL_NIL) return 0;
     if (v.type == VAL_BOOL) return v.data.i;
     if (v.type == VAL_INT) return v.data.i != 0;
+    return 1;
+}
+
+static int is_safe_path(const char* path) {
+    if (!path) return 0;
+    // Basic check for traversal
+    if (strstr(path, "..")) return 0;
     return 1;
 }
 
@@ -263,25 +274,37 @@ static Value eval_binary(AstNode* node, Environment* env) {
     Value right = eval(node->data.binary.right, env);
     if (right.type == VAL_RETURN || right.type == VAL_BREAK || right.type == VAL_CONTINUE) return right;
 
-    if (left.type == VAL_INT && right.type == VAL_INT) {
-        if (strcmp(op, "+") == 0) return val_int(left.data.i + right.data.i);
-        if (strcmp(op, "-") == 0) return val_int(left.data.i - right.data.i);
-        if (strcmp(op, "*") == 0) return val_int(left.data.i * right.data.i);
+    if ((left.type == VAL_INT || left.type == VAL_FLOAT) && (right.type == VAL_INT || right.type == VAL_FLOAT)) {
+        double l = (left.type == VAL_FLOAT) ? left.data.f : (double)left.data.i;
+        double r = (right.type == VAL_FLOAT) ? right.data.f : (double)right.data.i;
+        int is_f = (left.type == VAL_FLOAT || right.type == VAL_FLOAT);
+
+        if (strcmp(op, "+") == 0) return is_f ? val_float(l + r) : val_int((int)(l + r));
+        if (strcmp(op, "-") == 0) return is_f ? val_float(l - r) : val_int((int)(l - r));
+        if (strcmp(op, "*") == 0) return is_f ? val_float(l * r) : val_int((int)(l * r));
         if (strcmp(op, "/") == 0) {
-            if (right.data.i == 0) report_runtime_error(node, env, "MATH", "Division by zero");
-            return val_int(left.data.i / right.data.i);
+            if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero");
+            return is_f ? val_float(l / r) : val_int((int)(l / r));
         }
-        if (strcmp(op, ">") == 0) return val_bool(left.data.i > right.data.i);
-        if (strcmp(op, "<") == 0) return val_bool(left.data.i < right.data.i);
-        if (strcmp(op, ">=") == 0) return val_bool(left.data.i >= right.data.i);
-        if (strcmp(op, "<=") == 0) return val_bool(left.data.i <= right.data.i);
+        if (strcmp(op, ">") == 0) return val_bool(l > r);
+        if (strcmp(op, "<") == 0) return val_bool(l < r);
+        if (strcmp(op, ">=") == 0) return val_bool(l >= r);
+        if (strcmp(op, "<=") == 0) return val_bool(l <= r);
     }
     
     if (strcmp(op, "==") == 0) {
-        if (left.type != right.type) return val_bool(0);
-        if (left.type == VAL_INT) return val_bool(left.data.i == right.data.i);
-        if (left.type == VAL_STR) return val_bool(strcmp(left.data.s, right.data.s) == 0);
-        if (left.type == VAL_NIL) return val_bool(1);
+        if (left.type == right.type) {
+            if (left.type == VAL_INT) return val_bool(left.data.i == right.data.i);
+            if (left.type == VAL_FLOAT) return val_bool(left.data.f == right.data.f);
+            if (left.type == VAL_STR) return val_bool(strcmp(left.data.s, right.data.s) == 0);
+            if (left.type == VAL_NIL) return val_bool(1);
+            return val_bool(left.data.obj == right.data.obj);
+        }
+        if ((left.type == VAL_INT || left.type == VAL_FLOAT) && (right.type == VAL_INT || right.type == VAL_FLOAT)) {
+            double l = (left.type == VAL_FLOAT) ? left.data.f : (double)left.data.i;
+            double r = (right.type == VAL_FLOAT) ? right.data.f : (double)right.data.i;
+            return val_bool(l == r);
+        }
         return val_bool(0);
     }
     if (strcmp(op, "!=") == 0) {
@@ -295,12 +318,12 @@ static Value eval_binary(AstNode* node, Environment* env) {
     if (left.type == VAL_STR && strcmp(op, "+") == 0) {
         char buf[64];
         char* right_s = NULL;
-        if (right.type == VAL_STR) right_s = strdup(right.data.s);
-        else if (right.type == VAL_INT) { snprintf(buf, sizeof(buf), "%d", right.data.i); right_s = strdup(buf); }
-        else if (right.type == VAL_BOOL) right_s = strdup(right.data.i ? "true" : "false");
-        else if (right.type == VAL_OBJ) right_s = strdup("[Object]");
-        else if (right.type == VAL_ARR) right_s = strdup("[Array]");
-        else right_s = strdup("nil");
+        if (right.type == VAL_STR) right_s = nr_strdup(right.data.s);
+        else if (right.type == VAL_INT) { snprintf(buf, sizeof(buf), "%d", right.data.i); right_s = nr_strdup(buf); }
+        else if (right.type == VAL_BOOL) right_s = nr_strdup(right.data.i ? "true" : "false");
+        else if (right.type == VAL_OBJ) right_s = nr_strdup("[Object]");
+        else if (right.type == VAL_ARR) right_s = nr_strdup("[Array]");
+        else right_s = nr_strdup("nil");
         
         char* res = malloc(strlen(left.data.s) + strlen(right_s) + 1);
         strcpy(res, left.data.s);
@@ -316,7 +339,7 @@ static Value eval_binary(AstNode* node, Environment* env) {
 
 static Value eval_call(AstNode* node, Environment* env) {
     if (!node->data.call.name) return val_nil();
-    char* full_name = strdup(node->data.call.name);
+    char* full_name = nr_strdup(node->data.call.name);
     char* dot = strchr(full_name, '.');
     Value func_val = val_nil();
     
@@ -337,7 +360,8 @@ static Value eval_call(AstNode* node, Environment* env) {
                         arr->capacity *= 2;
                         arr->elements = realloc(arr->elements, sizeof(Value*) * arr->capacity);
                     }
-                    arr->elements[arr->count] = malloc(sizeof(Value));
+                    arr->elements[arr->count] = nr_malloc(sizeof(Value));
+
                     *arr->elements[arr->count] = val;
                     arr->count++;
                     free(full_name);
@@ -377,9 +401,10 @@ static Value eval_call(AstNode* node, Environment* env) {
                         int istart = start.data.i;
                         int ilen = len.data.i;
                         if (istart < 0) istart = 0;
-                        if (istart >= slen) { free(full_name); return val_str(strdup("")); }
+                        if (istart >= slen) { free(full_name); return val_str(nr_strdup("")); }
                         if (istart + ilen > slen) ilen = slen - istart;
-                        char* sub = malloc(ilen + 1);
+                        char* sub = nr_malloc(ilen + 1);
+
                         strncpy(sub, obj.data.s + istart, ilen);
                         sub[ilen] = 0;
                         free(full_name);
@@ -420,6 +445,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                 Value arg = eval(node->data.call.args[i], env);
                 if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
                 if (arg.type == VAL_INT) printf("%d\n", arg.data.i);
+                else if (arg.type == VAL_FLOAT) printf("%g\n", arg.data.f);
                 else if (arg.type == VAL_BOOL) printf("%s\n", arg.data.i ? "true" : "false");
                 else if (arg.type == VAL_STR) printf("%s\n", arg.data.s);
                 else if (arg.type == VAL_OBJ) printf("[Object]\n");
@@ -437,33 +463,35 @@ static Value eval_call(AstNode* node, Environment* env) {
             int len = 0;
             if (arg.type == VAL_ARR) len = arg.data.arr->count;
             else if (arg.type == VAL_STR) len = strlen(arg.data.s);
-            free(full_name);
             return val_int(len);
         }
         if (strcmp(full_name, "__builtin_file_write") == 0) {
             Value path = eval(node->data.call.args[0], env);
             Value content = eval(node->data.call.args[1], env);
             if (path.type == VAL_STR && content.type == VAL_STR) {
+                if (!is_safe_path(path.data.s)) {
+                    report_runtime_error(node, env, "SECURITY", "Path traversal attempt detected");
+                }
                 FILE* f = fopen(path.data.s, "w");
                 if (f) {
                     fputs(content.data.s, f);
                     fclose(f);
                 }
             }
-            free(full_name);
             return val_nil();
         }
         if (strcmp(full_name, "__builtin_file_read") == 0) {
             Value path = eval(node->data.call.args[0], env);
             Value res = val_nil();
             if (path.type == VAL_STR) {
+                if (!is_safe_path(path.data.s)) {
+                    report_runtime_error(node, env, "SECURITY", "Path traversal attempt detected");
+                }
                 char* s = read_file_internal(path.data.s);
                 if (s) {
                     res = val_str(s);
-                    free(s);
                 }
             }
-            free(full_name);
             return res;
         }
         if (strcmp(full_name, "__builtin_exec") == 0) {
@@ -471,21 +499,17 @@ static Value eval_call(AstNode* node, Environment* env) {
             if (cmd.type == VAL_STR) {
                 system(cmd.data.s);
             }
-            free(full_name);
             return val_nil();
         }
         if (strcmp(full_name, "__builtin_random") == 0) {
             static int seeded = 0;
             if (!seeded) { srand(time(NULL)); seeded = 1; }
-            free(full_name);
             return val_int(rand());
         }
         if (strcmp(full_name, "__builtin_time_now") == 0) {
-            free(full_name);
             return val_int((int)time(NULL));
         }
         if (strcmp(full_name, "__builtin_db_open") == 0) {
-            free(full_name);
             return eval(node->data.call.args[0], env);
         }
         if (strcmp(full_name, "__builtin_db_exec") == 0) {
@@ -510,7 +534,6 @@ static Value eval_call(AstNode* node, Environment* env) {
                     sqlite3_close(db);
                 }
             }
-            free(full_name);
             return val_nil();
         }
         // SQLite query execution using prepare/step
@@ -539,20 +562,24 @@ static Value eval_call(AstNode* node, Environment* env) {
                                 const char* text = (const char*)sqlite3_column_text(stmt, i);
                                 // Set field in Nira object
                                 if (o.data.obj->count >= o.data.obj->capacity) {
+                                    int old_cap = o.data.obj->capacity;
                                     o.data.obj->capacity *= 2;
-                                    o.data.obj->keys = realloc(o.data.obj->keys, sizeof(char*) * o.data.obj->capacity);
-                                    o.data.obj->values = realloc(o.data.obj->values, sizeof(Value*) * o.data.obj->capacity);
+                                    o.data.obj->keys = nr_realloc(o.data.obj->keys, sizeof(char*) * old_cap, sizeof(char*) * o.data.obj->capacity);
+                                    o.data.obj->values = nr_realloc(o.data.obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * o.data.obj->capacity);
                                 }
-                                o.data.obj->keys[o.data.obj->count] = strdup(name);
-                                o.data.obj->values[o.data.obj->count] = malloc(sizeof(Value));
+                                o.data.obj->keys[o.data.obj->count] = nr_strdup(name);
+                                o.data.obj->values[o.data.obj->count] = nr_malloc(sizeof(Value));
+
                                 *o.data.obj->values[o.data.obj->count] = val_str((char*)text);
                                 o.data.obj->count++;
                             }
                             if (a.data.arr->count >= a.data.arr->capacity) {
+                                int old_cap = a.data.arr->capacity;
                                 a.data.arr->capacity *= 2;
-                                a.data.arr->elements = realloc(a.data.arr->elements, sizeof(Value*) * a.data.arr->capacity);
+                                a.data.arr->elements = nr_realloc(a.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * a.data.arr->capacity);
                             }
-                            a.data.arr->elements[a.data.arr->count] = malloc(sizeof(Value));
+                            a.data.arr->elements[a.data.arr->count] = nr_malloc(sizeof(Value));
+
                             *a.data.arr->elements[a.data.arr->count] = o;
                             a.data.arr->count++;
                         }
@@ -561,7 +588,6 @@ static Value eval_call(AstNode* node, Environment* env) {
                     sqlite3_close(db);
                 }
             }
-            free(full_name);
             return a;
         }
         if (strcmp(full_name, "__builtin_delay") == 0) {
@@ -646,6 +672,9 @@ static Value eval_call(AstNode* node, Environment* env) {
         if (strcmp(full_name, "__builtin_file_delete") == 0) {
             Value path = eval(node->data.call.args[0], env);
             if (path.type == VAL_STR) {
+                if (!is_safe_path(path.data.s)) {
+                    report_runtime_error(node, env, "SECURITY", "Path traversal attempt detected");
+                }
                 remove(path.data.s);
             }
             free(full_name);
@@ -681,7 +710,8 @@ static Value eval_call(AstNode* node, Environment* env) {
                     arr.data.arr->capacity *= 2;
                     arr.data.arr->elements = realloc(arr.data.arr->elements, sizeof(Value*) * arr.data.arr->capacity);
                 }
-                arr.data.arr->elements[arr.data.arr->count] = malloc(sizeof(Value));
+                arr.data.arr->elements[arr.data.arr->count] = nr_malloc(sizeof(Value));
+
                 *arr.data.arr->elements[arr.data.arr->count] = val;
                 arr.data.arr->count++;
             }
@@ -715,41 +745,48 @@ static Value eval_call(AstNode* node, Environment* env) {
                     char err_msg[256];
                     snprintf(err_msg, sizeof(err_msg), "Could not bind to port %d: %s", port.data.i, strerror(errno));
                     report_runtime_error(node, env, "NETWORK", err_msg);
+                    close(server_fd);
                     free(full_name);
                     return val_nil();
                 }
                 if (listen(server_fd, 3) < 0) {
                     report_runtime_error(node, env, "NETWORK", "Could not listen on port");
-                    free(full_name);
+                    close(server_fd);
                     return val_nil();
                 }
                 printf("HTTP Server listening on port %d...\n", port.data.i);
                 while(1) {
+                    ArenaBlock* checkpoint = nr_arena_checkpoint();
                     new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
-                    if (new_socket < 0) continue;
+                    if (new_socket < 0) {
+                        nr_arena_rollback(checkpoint);
+                        continue;
+                    }
 
                     char buffer[4096] = {0};
                     int bytes_read = read(new_socket, buffer, 4096);
                     if (bytes_read <= 0) {
                         close(new_socket);
+                        nr_arena_rollback(checkpoint);
                         continue;
                     }
                     
                     // Simple parse
-                    char method[16] = {0}, path[256] = {0};
-                    if (sscanf(buffer, "%s %s", method, path) < 2) {
+                    char method[16] = {0}, path[1024] = {0};
+                    if (sscanf(buffer, "%15s %1023s", method, path) < 2) {
                         close(new_socket);
+                        nr_arena_rollback(checkpoint);
                         continue;
                     }
-                    
+
                     Value req = val_obj();
-                    set_field(req.data.obj, "method", val_str(strdup(method)));
-                    set_field(req.data.obj, "path", val_str(strdup(path)));
+                    set_field(req.data.obj, "method", val_str(nr_strdup(method)));
+                    set_field(req.data.obj, "path", val_str(nr_strdup(path)));
                     
                     char* body_ptr = strstr(buffer, "\r\n\r\n");
                     if (body_ptr) {
                         body_ptr += 4;
-                        set_field(req.data.obj, "body", val_str(strdup(body_ptr)));
+                        set_field(req.data.obj, "body", val_str(nr_strdup(body_ptr)));
                     } else {
                         set_field(req.data.obj, "body", val_nil());
                     }
@@ -776,18 +813,21 @@ static Value eval_call(AstNode* node, Environment* env) {
                                 Value* hv = h.data.obj->values[i];
                                 char* hs = "";
                                 if (hv->type == VAL_STR) hs = hv->data.s;
-                                else if (hv->type == VAL_INT) { sprintf(line, "%d", hv->data.i); hs = strdup(line); }
+                                else if (hv->type == VAL_INT) { snprintf(line, sizeof(line), "%d", hv->data.i); hs = nr_strdup(line); }
                                 
-                                sprintf(line, "%s: %s\r\n", h.data.obj->keys[i], hs);
-                                strcat(headers_str, line);
+                                snprintf(line, sizeof(line), "%s: %s\r\n", h.data.obj->keys[i], hs);
+                                if (strlen(headers_str) + strlen(line) < sizeof(headers_str) - 1) {
+                                    strncat(headers_str, line, sizeof(headers_str) - strlen(headers_str) - 1);
+                                }
                             }
                         }
                     }
                     
                     char resp[8192];
-                    sprintf(resp, "HTTP/1.1 %d OK\r\n%sContent-Length: %zu\r\n\r\n%s", status, headers_str, strlen(body), body);
+                    snprintf(resp, sizeof(resp), "HTTP/1.1 %d OK\r\n%sContent-Length: %zu\r\n\r\n%s", status, headers_str, strlen(body), body);
                     send(new_socket, resp, strlen(resp), 0);
                     close(new_socket);
+                    nr_arena_rollback(checkpoint);
                 }
             }
             free(full_name);
@@ -799,8 +839,25 @@ static Value eval_call(AstNode* node, Environment* env) {
             int res = 0;
             if (v.type == VAL_INT) res = v.data.i;
             else if (v.type == VAL_STR) res = atoi(v.data.s);
-            free(full_name);
             return val_int(res);
+        }
+        if (strcmp(full_name, "__builtin_obj_keys") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            Value a = val_arr();
+            if (v.type == VAL_OBJ) {
+                for (int i=0; i<v.data.obj->count; i++) {
+                    if (a.data.arr->count >= a.data.arr->capacity) {
+                        int old_cap = a.data.arr->capacity;
+                        a.data.arr->capacity *= 2;
+                        a.data.arr->elements = nr_realloc(a.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * a.data.arr->capacity);
+                    }
+                    a.data.arr->elements[a.data.arr->count] = nr_malloc(sizeof(Value));
+                    *a.data.arr->elements[a.data.arr->count] = val_str(v.data.obj->keys[i]);
+                    a.data.arr->count++;
+                }
+            }
+            return a;
         }
         if (strcmp(full_name, "len") == 0 || strcmp(full_name, "__builtin_len") == 0) {
             Value v = eval(node->data.call.args[0], env);
@@ -836,7 +893,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                     while(*p == ' ' || *p == ':') p++;
                     if (*p == '"') { 
                         p++; char val[256]; int j=0; while(*p && *p != '"') val[j++] = *p++; val[j] = 0; p++; 
-                        set_field(obj.data.obj, key, val_str(strdup(val))); 
+                        set_field(obj.data.obj, key, val_str(nr_strdup(val))); 
                     } else { 
                         char val[32]; int j=0; while(*p && *p != ',' && *p != ' ' && *p != '}') val[j++] = *p++; val[j] = 0; 
                         set_field(obj.data.obj, key, val_int(atoi(val))); 
@@ -914,7 +971,7 @@ Value eval(AstNode* node, Environment* env) {
             Value v = eval(node->data.assign.value, env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
             
-            char* target = strdup(node->data.assign.target);
+            char* target = nr_strdup(node->data.assign.target);
             char* dot = strchr(target, '.');
             if (dot) {
                 *dot = '\0';
@@ -936,8 +993,9 @@ Value eval(AstNode* node, Environment* env) {
                             obj.data.obj->keys = realloc(obj.data.obj->keys, sizeof(char*) * obj.data.obj->capacity);
                             obj.data.obj->values = realloc(obj.data.obj->values, sizeof(Value*) * obj.data.obj->capacity);
                         }
-                        obj.data.obj->keys[obj.data.obj->count] = strdup(field_name);
-                        obj.data.obj->values[obj.data.obj->count] = malloc(sizeof(Value));
+                        obj.data.obj->keys[obj.data.obj->count] = nr_strdup(field_name);
+                        obj.data.obj->values[obj.data.obj->count] = nr_malloc(sizeof(Value));
+
                         *obj.data.obj->values[obj.data.obj->count] = v;
                         obj.data.obj->count++;
                     }
@@ -945,11 +1003,10 @@ Value eval(AstNode* node, Environment* env) {
             } else {
                 env_assign(env, target, v);
             }
-            free(target);
             return v;
         }
         case AST_VAR_REF: {
-            char* full_name = strdup(node->data.var_name);
+            char* full_name = nr_strdup(node->data.var_name);
             char* dot = strchr(full_name, '.');
             Value v = val_nil();
             if (dot) {
@@ -959,10 +1016,10 @@ Value eval(AstNode* node, Environment* env) {
             } else {
                 v = env_get(env, full_name);
             }
-            free(full_name);
             return v;
         }
         case AST_LITERAL_INT: return val_int(node->data.int_val);
+        case AST_LITERAL_FLOAT: return val_float(node->data.float_val);
         case AST_LITERAL_STR: return val_str(node->data.str_val);
         case AST_LITERAL_BOOL: return val_bool(node->data.int_val);
         case AST_LITERAL_NULL: return val_nil();
@@ -1023,12 +1080,14 @@ Value eval(AstNode* node, Environment* env) {
             AstField* f = node->data.object.fields;
             while (f) {
                 if (obj.data.obj->count >= obj.data.obj->capacity) {
+                    int old_cap = obj.data.obj->capacity;
                     obj.data.obj->capacity *= 2;
-                    obj.data.obj->keys = realloc(obj.data.obj->keys, sizeof(char*) * obj.data.obj->capacity);
-                    obj.data.obj->values = realloc(obj.data.obj->values, sizeof(Value*) * obj.data.obj->capacity);
+                    obj.data.obj->keys = nr_realloc(obj.data.obj->keys, sizeof(char*) * old_cap, sizeof(char*) * obj.data.obj->capacity);
+                    obj.data.obj->values = nr_realloc(obj.data.obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * obj.data.obj->capacity);
                 }
-                obj.data.obj->keys[obj.data.obj->count] = strdup(f->name);
-                obj.data.obj->values[obj.data.obj->count] = malloc(sizeof(Value));
+                obj.data.obj->keys[obj.data.obj->count] = nr_strdup(f->name);
+                obj.data.obj->values[obj.data.obj->count] = nr_malloc(sizeof(Value));
+
                 Value val = eval(f->value, env);
                 if (val.type == VAL_RETURN) val = *val.data.return_val;
                 *obj.data.obj->values[obj.data.obj->count] = val;
@@ -1041,10 +1100,12 @@ Value eval(AstNode* node, Environment* env) {
             Value arr = val_arr();
             for (int i=0; i<node->data.array.count; i++) {
                 if (arr.data.arr->count >= arr.data.arr->capacity) {
+                    int old_cap = arr.data.arr->capacity;
                     arr.data.arr->capacity *= 2;
-                    arr.data.arr->elements = realloc(arr.data.arr->elements, sizeof(Value*) * arr.data.arr->capacity);
+                    arr.data.arr->elements = nr_realloc(arr.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * arr.data.arr->capacity);
                 }
-                arr.data.arr->elements[arr.data.arr->count] = malloc(sizeof(Value));
+                arr.data.arr->elements[arr.data.arr->count] = nr_malloc(sizeof(Value));
+
                 Value val = eval(node->data.array.elements[i], env);
                 if (val.type == VAL_RETURN) val = *val.data.return_val;
                 *arr.data.arr->elements[arr.data.arr->count] = val;
@@ -1055,10 +1116,14 @@ Value eval(AstNode* node, Environment* env) {
         case AST_INDEX: {
             Value obj = eval(node->data.index.object, env);
             Value idx = eval(node->data.index.index, env);
+            if (obj.type == VAL_RETURN) obj = *obj.data.return_val;
+            if (idx.type == VAL_RETURN) idx = *idx.data.return_val;
             if (obj.type == VAL_ARR) {
                 if (idx.type != VAL_INT) report_runtime_error(node, env, "TYPE", "Array index must be integer");
                 if (idx.data.i < 0 || idx.data.i >= obj.data.arr->count) report_runtime_error(node, env, "BOUNDS", "Array index out of bounds");
                 return *obj.data.arr->elements[idx.data.i];
+            } else if (obj.type == VAL_OBJ && idx.type == VAL_STR) {
+                return get_dot_value(obj, idx.data.s);
             }
             return val_nil();
         }
@@ -1085,10 +1150,15 @@ Value eval(AstNode* node, Environment* env) {
             Value obj = eval(node->data.index_assign.object, env);
             Value idx = eval(node->data.index_assign.index, env);
             Value val = eval(node->data.index_assign.value, env);
+            if (obj.type == VAL_RETURN) obj = *obj.data.return_val;
+            if (idx.type == VAL_RETURN) idx = *idx.data.return_val;
+            if (val.type == VAL_RETURN) val = *val.data.return_val;
             if (obj.type == VAL_ARR) {
                 if (idx.type != VAL_INT) report_runtime_error(node, env, "TYPE", "Array index must be integer");
                 if (idx.data.i < 0 || idx.data.i >= obj.data.arr->count) report_runtime_error(node, env, "BOUNDS", "Array index out of bounds");
                 *obj.data.arr->elements[idx.data.i] = val;
+            } else if (obj.type == VAL_OBJ && idx.type == VAL_STR) {
+                set_field(obj.data.obj, idx.data.s, val);
             }
             return val;
         }
@@ -1126,7 +1196,7 @@ Value eval(AstNode* node, Environment* env) {
             while (root->parent) root = root->parent;
             Environment* import_env = env_new(root);
             import_env->source = source;
-            import_env->filename = strdup(full_path);
+            import_env->filename = nr_strdup(full_path);
             eval(imported_program, import_env);
             char* final_name = node->data.import_stmt.alias;
             if (!final_name && node->data.import_stmt.symbol_count == 0) {
@@ -1138,12 +1208,14 @@ Value eval(AstNode* node, Environment* env) {
                 Variable* v = import_env->vars;
                 while (v) {
                     if (mod_obj.data.obj->count >= mod_obj.data.obj->capacity) {
+                        int old_cap = mod_obj.data.obj->capacity;
                         mod_obj.data.obj->capacity *= 2;
-                        mod_obj.data.obj->keys = realloc(mod_obj.data.obj->keys, sizeof(char*) * mod_obj.data.obj->capacity);
-                        mod_obj.data.obj->values = realloc(mod_obj.data.obj->values, sizeof(Value*) * mod_obj.data.obj->capacity);
+                        mod_obj.data.obj->keys = nr_realloc(mod_obj.data.obj->keys, sizeof(char*) * old_cap, sizeof(char*) * mod_obj.data.obj->capacity);
+                        mod_obj.data.obj->values = nr_realloc(mod_obj.data.obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * mod_obj.data.obj->capacity);
                     }
-                    mod_obj.data.obj->keys[mod_obj.data.obj->count] = strdup(v->name);
-                    mod_obj.data.obj->values[mod_obj.data.obj->count] = malloc(sizeof(Value));
+                    mod_obj.data.obj->keys[mod_obj.data.obj->count] = nr_strdup(v->name);
+                    mod_obj.data.obj->values[mod_obj.data.obj->count] = nr_malloc(sizeof(Value));
+
                     *mod_obj.data.obj->values[mod_obj.data.obj->count] = v->value;
                     mod_obj.data.obj->count++;
                     v = v->next;

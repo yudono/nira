@@ -1,9 +1,9 @@
 #include "../include/ast.h"
-#include <stdlib.h>
+#include "../include/arena.h"
 #include <string.h>
 
 AstNode* ast_new(AstNodeType type, Token t) {
-    AstNode* node = (AstNode*)malloc(sizeof(AstNode));
+    AstNode* node = (AstNode*)nr_malloc(sizeof(AstNode));
     node->type = type;
     node->line = t.line;
     node->column = t.column;
@@ -11,9 +11,6 @@ AstNode* ast_new(AstNodeType type, Token t) {
     return node;
 }
 
-// ast_free would be complex recursive, skipping for MVP brevity or implementing later
 void ast_free(AstNode* node) {
-    if (!node) return;
-    // ...
-    free(node);
+    // Arena handles this
 }

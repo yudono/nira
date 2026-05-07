@@ -4,12 +4,13 @@
 #include "ast.h"
 
 typedef enum {
+    VAL_NIL,
     VAL_INT,
+    VAL_FLOAT,
     VAL_STR,
     VAL_OBJ,
     VAL_ARR,
     VAL_FUNC,
-    VAL_NIL,
     VAL_RETURN,
     VAL_BOOL,
     VAL_BREAK,
@@ -34,6 +35,7 @@ typedef struct Value {
     ValueType type;
     union {
         int i;
+        double f;
         char* s;
         Object* obj;
         Array* arr;
@@ -59,6 +61,7 @@ typedef struct Environment {
 } Environment;
 
 Value val_int(int i);
+Value val_float(double f);
 Value val_str(char* s);
 Value val_obj();
 Value val_arr();

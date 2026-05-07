@@ -9,6 +9,7 @@ typedef enum {
     AST_ASSIGN,
     AST_VAR_REF,
     AST_LITERAL_INT,
+    AST_LITERAL_FLOAT,
     AST_LITERAL_STR,
     AST_OBJECT,
     AST_CALL,
@@ -72,6 +73,7 @@ typedef struct AstNode {
 
         // Literals
         int int_val;
+        double float_val;
         char* str_val;
 
         // Object Literal

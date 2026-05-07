@@ -49,37 +49,78 @@ static int is_global(const char* name) {
 }
 
 static void print_runtime(FILE* out) {
-    fprintf(out, "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <time.h>\n#include <sqlite3.h>\n#include <regex.h>\n");
+    fprintf(out, "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <unistd.h>\n#include <sys/stat.h>\n#include <time.h>\n#include <sqlite3.h>\n#include <regex.h>\n#include <ctype.h>\n");
     fprintf(out, "#ifdef _WIN32\n  #include <winsock2.h>\n  #include <ws2tcpip.h>\n  #pragma comment(lib, \"ws2_32.lib\")\n  #define close closesocket\n  #define mkdir(p, m) _mkdir(p)\n#else\n  #include <sys/socket.h>\n  #include <netinet/in.h>\n  #include <arpa/inet.h>\n#endif\n\nint nr_argc; char** nr_argv;\n");
-    fprintf(out, "typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_ERROR } ValueType;\n");
-    fprintf(out, "struct Value; typedef struct Value { ValueType type; union { int i; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;\n\n");
-    fprintf(out, "Value val_nil() { return (Value){.type = VAL_NIL}; }\nValue val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }\nValue val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }\nValue val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = strdup(s)}; }\nValue val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = strdup(m)}; }\nValue val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = ptr}; }\nbool is_truthy(Value v) { if (v.type == VAL_NIL) return false; if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; return true; }\n\n");
-    fprintf(out, "Value val_obj() { Value v; v.type = VAL_OBJ; v.data.obj = malloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 8; v.data.obj->keys = malloc(sizeof(char*) * 8); v.data.obj->values = malloc(sizeof(Value*) * 8); return v; }\n");
-    fprintf(out, "Value val_arr() { Value v; v.type = VAL_ARR; v.data.arr = malloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 8; v.data.arr->elements = malloc(sizeof(Value*) * 8); return v; }\n\n");
-    fprintf(out, "void set_field(Value obj, const char* key, Value val) { if (obj.type != VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) { if(strcmp(obj.data.obj->keys[i], key) == 0) { *obj.data.obj->values[i] = val; return; } } if(obj.data.obj->count >= obj.data.obj->capacity) { obj.data.obj->capacity *= 2; obj.data.obj->keys = realloc(obj.data.obj->keys, sizeof(char*) * obj.data.obj->capacity); obj.data.obj->values = realloc(obj.data.obj->values, sizeof(Value*) * obj.data.obj->capacity); } obj.data.obj->keys[obj.data.obj->count] = strdup(key); obj.data.obj->values[obj.data.obj->count] = malloc(sizeof(Value)); *obj.data.obj->values[obj.data.obj->count] = val; obj.data.obj->count++; }\n");
+    fprintf(out, "typedef enum { VAL_NIL, VAL_INT, VAL_FLOAT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_ERROR } ValueType;\n");
+    fprintf(out, "typedef struct ArenaBlock { void* ptr; struct ArenaBlock* next; } ArenaBlock;\n");
+    fprintf(out, "typedef struct { ArenaBlock* blocks; } Arena; Arena* nr_arena;\n");
+    fprintf(out, "void* nr_alloc(size_t sz) { void* p = malloc(sz); ArenaBlock* b = malloc(sizeof(ArenaBlock)); b->ptr = p; b->next = nr_arena->blocks; nr_arena->blocks = b; return p; }\n");
+    fprintf(out, "void* nr_checkpoint() { return nr_arena->blocks; }\n");
+    fprintf(out, "void nr_rollback(void* cp) { ArenaBlock* curr = nr_arena->blocks; while(curr && curr != cp) { ArenaBlock* next = curr->next; free(curr->ptr); free(curr); curr = next; } nr_arena->blocks = cp; }\n");
+    fprintf(out, "void nr_arena_clear() { nr_rollback(NULL); }\n");
+    fprintf(out, "char* nr_strdup(const char* s) { char* d = nr_alloc(strlen(s)+1); strcpy(d, s); return d; }\n");
+    fprintf(out, "struct Value; typedef struct Value { ValueType type; union { int i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;\n\n");
+    fprintf(out, "Value val_nil() { return (Value){.type = VAL_NIL}; }\nValue val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }\nValue val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }\nValue val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }\nValue val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = nr_strdup(s)}; }\nValue val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }\nValue val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = ptr}; }\nbool is_truthy(Value v) { if (v.type == VAL_NIL) return false; if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if (v.type == VAL_FLOAT) return v.data.f != 0.0; return true; }\n\n");
+    fprintf(out, "Value val_obj() { Value v; v.type = VAL_OBJ; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 8; v.data.obj->keys = nr_alloc(sizeof(char*) * 8); v.data.obj->values = nr_alloc(sizeof(Value*) * 8); return v; }\n");
+    fprintf(out, "Value val_arr() { Value v; v.type = VAL_ARR; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 8; v.data.arr->elements = nr_alloc(sizeof(Value*) * 8); return v; }\n\n");
+    fprintf(out, "void set_field(Value obj, const char* key, Value val) { if (obj.type != VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) { if(strcmp(obj.data.obj->keys[i], key) == 0) { *obj.data.obj->values[i] = val; return; } } if(obj.data.obj->count >= obj.data.obj->capacity) { int old_cap = obj.data.obj->capacity; obj.data.obj->capacity *= 2; char** new_keys = nr_alloc(sizeof(char*) * obj.data.obj->capacity); Value** new_vals = nr_alloc(sizeof(Value*) * obj.data.obj->capacity); memcpy(new_keys, obj.data.obj->keys, sizeof(char*)*old_cap); memcpy(new_vals, obj.data.obj->values, sizeof(Value*)*old_cap); obj.data.obj->keys = new_keys; obj.data.obj->values = new_vals; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count] = nr_alloc(sizeof(Value)); *obj.data.obj->values[obj.data.obj->count] = val; obj.data.obj->count++; }\n");
     fprintf(out, "Value get_field(Value obj, const char* key) { if (obj.type != VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) { if(strcmp(obj.data.obj->keys[i], key) == 0) return *obj.data.obj->values[i]; } return val_nil(); }\n\n");
-    fprintf(out, "Value nr_rt_to_int(Value v) { if (v.type == VAL_INT) return v; if (v.type == VAL_STR) return val_int(atoi(v.data.s)); return val_int(0); }\n");
+    
+    // Runtime functions - ORDER MATTERS
+    fprintf(out, "Value nr_rt_push(Value arr, Value val) { if (arr.type != VAL_ARR) return val_nil(); if (arr.data.arr->count >= arr.data.arr->capacity) { int old_cap = arr.data.arr->capacity; arr.data.arr->capacity *= 2; Value** new_el = nr_alloc(sizeof(Value*) * arr.data.arr->capacity); memcpy(new_el, arr.data.arr->elements, sizeof(Value*)*old_cap); arr.data.arr->elements = new_el; } arr.data.arr->elements[arr.data.arr->count] = nr_alloc(sizeof(Value)); *arr.data.arr->elements[arr.data.arr->count] = val; arr.data.arr->count++; return val; }\n");
+    fprintf(out, "Value nr_rt_obj_keys(Value obj) { if (obj.type != VAL_OBJ) return val_arr(); Value a = val_arr(); for(int i=0; i<obj.data.obj->count; i++) nr_rt_push(a, val_str(obj.data.obj->keys[i])); return a; }\n");
+    fprintf(out, "Value nr_rt_pop(Value arr) { if (arr.type != VAL_ARR || arr.data.arr->count == 0) return val_nil(); arr.data.arr->count--; return *arr.data.arr->elements[arr.data.arr->count]; }\n");
+    fprintf(out, "Value nr_rt_at(Value v, Value idx) { if (v.type == VAL_ARR && idx.type == VAL_INT) { int i = idx.data.i; if (i < 0 || i >= v.data.arr->count) return val_nil(); return *v.data.arr->elements[i]; } if (v.type == VAL_OBJ && idx.type == VAL_STR) return get_field(v, idx.data.s); if (v.type == VAL_STR && idx.type == VAL_INT) { int i = idx.data.i; if (i < 0 || i >= (int)strlen(v.data.s)) return val_nil(); char s[2] = {v.data.s[i], 0}; return val_str(s); } return val_nil(); }\n");
+    fprintf(out, "Value nr_rt_set_at(Value v, Value idx, Value val) { if (v.type == VAL_ARR && idx.type == VAL_INT) { int i = idx.data.i; if (i >= 0 && i < v.data.arr->count) *v.data.arr->elements[i] = val; } else if (v.type == VAL_OBJ && idx.type == VAL_STR) set_field(v, idx.data.s, val); return val; }\n");
+    fprintf(out, "Value nr_rt_to_int(Value v) { if (v.type == VAL_INT) return v; if (v.type == VAL_STR) return val_int((int)strtol(v.data.s, NULL, 10)); return val_int(0); }\n");
     fprintf(out, "void nr_rt_print(Value v) { if (v.type == VAL_INT) printf(\"%%d\\n\", v.data.i); else if (v.type == VAL_BOOL) printf(\"%%s\\n\", v.data.i ? \"true\" : \"false\"); else if (v.type == VAL_STR) printf(\"%%s\\n\", v.data.s); else if (v.type == VAL_ARR) printf(\"[Array]\\n\"); else if (v.type == VAL_OBJ) printf(\"[Object]\\n\"); else if (v.type == VAL_ERROR) printf(\"Error: %%s\\n\", v.data.s); else printf(\"nil\\n\"); fflush(stdout); }\n");
     fprintf(out, "Value nr_rt_len(Value v) { if (v.type == VAL_ARR) return val_int(v.data.arr->count); if (v.type == VAL_STR) return val_int(strlen(v.data.s)); return val_int(0); }\n");
-    fprintf(out, "Value nr_rt_push(Value arr, Value val) { if (arr.type != VAL_ARR) return val_nil(); if (arr.data.arr->count >= arr.data.arr->capacity) { arr.data.arr->capacity *= 2; arr.data.arr->elements = realloc(arr.data.arr->elements, sizeof(Value*) * arr.data.arr->capacity); } arr.data.arr->elements[arr.data.arr->count] = malloc(sizeof(Value)); *arr.data.arr->elements[arr.data.arr->count] = val; arr.data.arr->count++; return val; }\n");
-    fprintf(out, "Value nr_rt_pop(Value arr) { if (arr.type != VAL_ARR || arr.data.arr->count == 0) return val_nil(); arr.data.arr->count--; return *arr.data.arr->elements[arr.data.arr->count]; }\n");
-    fprintf(out, "Value nr_rt_at(Value v, Value idx) { if (idx.type != VAL_INT) return val_nil(); int i = idx.data.i; if (v.type == VAL_ARR) { if (i < 0 || i >= v.data.arr->count) return val_nil(); return *v.data.arr->elements[i]; } if (v.type == VAL_STR) { if (i < 0 || i >= (int)strlen(v.data.s)) return val_nil(); char s[2] = {v.data.s[i], 0}; return val_str(s); } return val_nil(); }\n\n");
-    fprintf(out, "Value nr_rt_file_read(Value path) { if (path.type != VAL_STR) return val_nil(); FILE* f = fopen(path.data.s, \"r\"); if (!f) return val_nil(); fseek(f, 0, SEEK_END); long size = ftell(f); fseek(f, 0, SEEK_SET); char* b = malloc(size + 1); fread(b, 1, size, f); b[size] = 0; fclose(f); Value res = val_str(b); free(b); return res; }\n");
-    fprintf(out, "Value nr_rt_file_write(Value path, Value content) { if (path.type != VAL_STR || content.type != VAL_STR) return val_nil(); FILE* f = fopen(path.data.s, \"w\"); if (!f) return val_nil(); fputs(content.data.s, f); fclose(f); return val_int(1); }\n");
-    fprintf(out, "Value nr_rt_file_exists(Value path) { if (path.type != VAL_STR) return val_bool(false); struct stat st; return val_bool(stat(path.data.s, &st) == 0); }\n");
-    fprintf(out, "Value nr_rt_file_delete(Value path) { if (path.type != VAL_STR) return val_nil(); remove(path.data.s); return val_int(1); }\n\n");
+    
+    fprintf(out, "Value nr_rt_add(Value l, Value r) {\n");
+    fprintf(out, "  if (l.type == VAL_STR || r.type == VAL_STR) {\n");
+    fprintf(out, "    char buf_l[64], buf_r[64]; char *sl, *sr;\n");
+    fprintf(out, "    if (l.type == VAL_STR) sl = l.data.s; else if (l.type == VAL_INT) { snprintf(buf_l, 64, \"%%d\", l.data.i); sl = buf_l; } else if (l.type == VAL_FLOAT) { snprintf(buf_l, 64, \"%%g\", l.data.f); sl = buf_l; } else sl = \"nil\";\n");
+    fprintf(out, "    if (r.type == VAL_STR) sr = r.data.s; else if (r.type == VAL_INT) { snprintf(buf_r, 64, \"%%d\", r.data.i); sr = buf_r; } else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, \"%%g\", r.data.f); sr = buf_r; } else sr = \"nil\";\n");
+    fprintf(out, "    char* res = nr_alloc(strlen(sl) + strlen(sr) + 1); strcpy(res, sl); strcat(res, sr); return val_str(res);\n");
+    fprintf(out, "  }\n");
+    fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
+    fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n");
+    fprintf(out, "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+    fprintf(out, "    return val_float(lv + rv);\n");
+    fprintf(out, "  }\n");
+    fprintf(out, "  return val_int(l.data.i + r.data.i);\n");
+    fprintf(out, "}\n");
+
+    fprintf(out, "Value nr_rt_eq(Value l, Value r) {\n");
+    fprintf(out, "  if (l.type == r.type) {\n");
+    fprintf(out, "    if (l.type == VAL_NIL) return val_bool(1);\n");
+    fprintf(out, "    if (l.type == VAL_STR) return val_bool(strcmp(l.data.s, r.data.s) == 0);\n");
+    fprintf(out, "    if (l.type == VAL_INT || l.type == VAL_BOOL) return val_bool(l.data.i == r.data.i);\n");
+    fprintf(out, "    if (l.type == VAL_FLOAT) return val_bool(l.data.f == r.data.f);\n");
+    fprintf(out, "    return val_bool(l.data.obj == r.data.obj);\n");
+    fprintf(out, "  }\n");
+    fprintf(out, "  if ((l.type == VAL_INT || l.type == VAL_FLOAT) && (r.type == VAL_INT || r.type == VAL_FLOAT)) {\n");
+    fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+    fprintf(out, "    return val_bool(lv == rv);\n");
+    fprintf(out, "  }\n");
+    fprintf(out, "  return val_bool(0);\n");
+    fprintf(out, "}\n\n");
+
+    fprintf(out, "static int is_safe_path(const char* path) { if (!path) return 0; if (strstr(path, \"..\")) return 0; return 1; }\n");
+    fprintf(out, "Value nr_rt_read_file(Value path) { if (path.type != VAL_STR) return val_nil(); FILE* f = fopen(path.data.s, \"rb\"); if (!f) return val_nil(); fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f); char* b = nr_alloc(sz + 1); fread(b, 1, sz, f); b[sz] = 0; fclose(f); return val_str(b); }\n");
+    fprintf(out, "Value nr_rt_file_write(Value path, Value content) { if (path.type != VAL_STR || content.type != VAL_STR) return val_nil(); if (!is_safe_path(path.data.s)) return val_error(\"Path traversal detected\"); FILE* f = fopen(path.data.s, \"w\"); if (!f) return val_nil(); fputs(content.data.s, f); fclose(f); return val_int(1); }\n");
+    fprintf(out, "Value nr_rt_file_exists(Value path) { if (path.type != VAL_STR) return val_bool(false); if (!is_safe_path(path.data.s)) return val_bool(false); struct stat st; return val_bool(stat(path.data.s, &st) == 0); }\n");
+    fprintf(out, "Value nr_rt_file_delete(Value path) { if (path.type != VAL_STR) return val_nil(); if (!is_safe_path(path.data.s)) return val_error(\"Path traversal detected\"); remove(path.data.s); return val_int(1); }\n\n");
     fprintf(out, "Value nr_rt_now() { return val_int((int)time(NULL)); }\nValue nr_rt_sleep(Value ms) { if (ms.type == VAL_INT) usleep(ms.data.i * 1000); return val_nil(); }\nValue nr_rt_random() { return val_int(rand()); }\n\n");
-    fprintf(out, "Value nr_rt_substring(Value s, Value start, Value len) { if (s.type != VAL_STR || start.type != VAL_INT || len.type != VAL_INT) return val_nil(); int slen = strlen(s.data.s); int istart = start.data.i; int ilen = len.data.i; if (istart < 0) istart = 0; if (istart >= slen) return val_str(\"\"); if (ilen < 0) ilen = 0; if (istart + ilen > slen) ilen = slen - istart; char* sub = malloc(ilen + 1); strncpy(sub, s.data.s + istart, ilen); sub[ilen] = 0; Value res = val_str(sub); free(sub); return res; }\n\n");
-    fprintf(out, "Value nr_rt_exec(Value cmd) { if (cmd.type != VAL_STR) return val_int(-1); return val_int(system(cmd.data.s)); }\n");
-    fprintf(out, "Value nr_rt_exit(Value code) { if (code.type == VAL_INT) exit(code.data.i); else exit(0); return val_nil(); }\n\n");
+    fprintf(out, "Value nr_rt_substring(Value s, Value start, Value len) { if (s.type != VAL_STR || start.type != VAL_INT || len.type != VAL_INT) return val_nil(); int slen = strlen(s.data.s); int istart = start.data.i; int ilen = len.data.i; if (istart < 0) istart = 0; if (istart >= slen) return val_str(\"\"); if (ilen < 0) ilen = 0; if (istart + ilen > slen) ilen = slen - istart; char* sub = nr_alloc(ilen + 1); strncpy(sub, s.data.s + istart, ilen); sub[ilen] = 0; return val_str(sub); }\n\n");
+    fprintf(out, "Value nr_rt_exec(Value cmd) { if (cmd.type != VAL_STR) return val_int(-1); for(char* p=cmd.data.s; *p; p++) { if(!isalnum(*p) && *p!='.' && *p!='/' && *p!='_' && *p!='-' && *p!=' ') return val_error(\"Illegal character in command\"); } return val_int(system(cmd.data.s)); }\n");
     fprintf(out, "Value nr_rt_str_index_of(Value s, Value sub) { if (s.type != VAL_STR || sub.type != VAL_STR) return val_int(-1); char* p = strstr(s.data.s, sub.data.s); if (!p) return val_int(-1); int res = (int)(p - s.data.s); return val_int(res); }\n");
-    fprintf(out, "Value nr_rt_str_replace(Value s, Value old, Value new_str) { if (s.type != VAL_STR || old.type != VAL_STR || new_str.type != VAL_STR) return s; int oldlen = strlen(old.data.s); if (oldlen == 0) return s; int count = 0; char *p = s.data.s; while ((p = strstr(p, old.data.s))) { count++; p += oldlen; } char* res = malloc(strlen(s.data.s) + count * (strlen(new_str.data.s) - oldlen) + 1); char* d = res; p = s.data.s; while (*p) { if (strstr(p, old.data.s) == p) { strcpy(d, new_str.data.s); d += strlen(new_str.data.s); p += oldlen; } else *d++ = *p++; } *d = 0; Value v = val_str(res); free(res); return v; }\n");
     fprintf(out, "Value nr_rt_str_match(Value s, Value regex_str) { if (s.type != VAL_STR || regex_str.type != VAL_STR) return val_bool(0); regex_t regex; int reti = regcomp(&regex, regex_str.data.s, REG_EXTENDED); if (reti) return val_bool(0); reti = regexec(&regex, s.data.s, 0, NULL, 0); regfree(&regex); return val_bool(!reti); }\n");
-    fprintf(out, "Value nr_rt_add(Value l, Value r) { if (l.type == VAL_STR || r.type == VAL_STR) { char buf_l[64], buf_r[64]; char *sl, *sr; if (l.type == VAL_STR) sl = l.data.s; else if (l.type == VAL_INT) { snprintf(buf_l, 64, \"%%d\", l.data.i); sl = buf_l; } else sl = \"nil\"; if (r.type == VAL_STR) sr = r.data.s; else if (r.type == VAL_INT) { snprintf(buf_r, 64, \"%%d\", r.data.i); sr = buf_r; } else sr = \"nil\"; char* res = malloc(strlen(sl) + strlen(sr) + 1); strcpy(res, sl); strcat(res, sr); Value v = val_str(res); free(res); return v; } return val_int(l.data.i + r.data.i); }\n");
-    fprintf(out, "Value nr_rt_eq(Value l, Value r) { if (l.type != r.type) return val_bool(0); if (l.type == VAL_NIL) return val_bool(1); if (l.type == VAL_STR) return val_bool(strcmp(l.data.s, r.data.s) == 0); if (l.type == VAL_INT || l.type == VAL_BOOL) return val_bool(l.data.i == r.data.i); return val_bool(l.data.obj == r.data.obj); }\n");
     fprintf(out, "Value nr_rt_args() { Value a = val_arr(); for(int i=0; i<nr_argc; i++) nr_rt_push(a, val_str(nr_argv[i])); return a; }\n");
-    fprintf(out, "char* val_to_json(Value v) { if (v.type == VAL_INT) { char* b = malloc(32); sprintf(b, \"%%d\", v.data.i); return b; } if (v.type == VAL_STR) { char* b = malloc(strlen(v.data.s) + 3); sprintf(b, \"\\\"%%s\\\"\", v.data.s); return b; } if (v.type == VAL_BOOL) return strdup(v.data.i ? \"true\" : \"false\"); if (v.type == VAL_ARR) { char* res = strdup(\"[\"); for (int i=0; i<v.data.arr->count; i++) { char* item = val_to_json(*v.data.arr->elements[i]); char* old = res; res = malloc(strlen(old) + strlen(item) + 3); sprintf(res, \"%%s%%s%%s\", old, item, i < v.data.arr->count-1 ? \",\" : \"\"); free(old); free(item); } char* old = res; res = malloc(strlen(old) + 2); sprintf(res, \"%%s]\", old); free(old); return res; } if (v.type == VAL_OBJ) { char* res = strdup(\"{\"); for (int i=0; i<v.data.obj->count; i++) { char* val = val_to_json(*v.data.obj->values[i]); char* old = res; res = malloc(strlen(old) + strlen(v.data.obj->keys[i]) + strlen(val) + 6); sprintf(res, \"%%s\\\"%%s\\\":%%s%%s\", old, v.data.obj->keys[i], val, i < v.data.obj->count-1 ? \",\" : \"\"); free(old); free(val); } char* old = res; res = malloc(strlen(old) + 2); sprintf(res, \"%%s}\", old); free(old); return res; } return strdup(\"null\"); }\n");
-    fprintf(out, "Value nr_rt_json_encode(Value v) { char* s = val_to_json(v); Value res = val_str(s); free(s); return res; }\n\n");
+    
+    fprintf(out, "char* val_to_json(Value v) { if (v.type == VAL_INT) { char* b = nr_alloc(32); sprintf(b, \"%%d\", v.data.i); return b; } if (v.type == VAL_STR) { char* b = nr_alloc(strlen(v.data.s) + 3); sprintf(b, \"\\\"%%s\\\"\", v.data.s); return b; } if (v.type == VAL_BOOL) return nr_strdup(v.data.i ? \"true\" : \"false\"); if (v.type == VAL_ARR) { char* res = nr_strdup(\"[\"); for (int i=0; i<v.data.arr->count; i++) { char* item = val_to_json(*v.data.arr->elements[i]); char* old = res; res = nr_alloc(strlen(old) + strlen(item) + 3); sprintf(res, \"%%s%%s%%s\", old, item, i < v.data.arr->count-1 ? \",\" : \"\"); } char* old = res; res = nr_alloc(strlen(old) + 2); sprintf(res, \"%%s]\", old); return res; } if (v.type == VAL_OBJ) { char* res = nr_strdup(\"{\"); for (int i=0; i<v.data.obj->count; i++) { char* val = val_to_json(*v.data.obj->values[i]); char* old = res; res = nr_alloc(strlen(old) + strlen(v.data.obj->keys[i]) + strlen(val) + 6); sprintf(res, \"%%s\\\"%%s\\\":%%s%%s\", old, v.data.obj->keys[i], val, i < v.data.obj->count-1 ? \",\" : \"\"); } char* old = res; res = nr_alloc(strlen(old) + 2); sprintf(res, \"%%s}\", old); return res; } return nr_strdup(\"null\"); }\n");
+    fprintf(out, "Value nr_rt_json_encode(Value v) { return val_str(val_to_json(v)); }\n\n");
+    
     fprintf(out, "Value nr_rt_db_open(Value path) { return path; }\n");
     fprintf(out, "void bind_val(sqlite3_stmt* stmt, int idx, Value v) {\n");
     fprintf(out, "  if (v.type == VAL_INT || v.type == VAL_BOOL) sqlite3_bind_int(stmt, idx, v.data.i);\n");
@@ -108,7 +149,7 @@ static void print_runtime(FILE* out) {
     fprintf(out, "        Value v = val_nil();\n");
     fprintf(out, "        if (type == SQLITE_INTEGER) v = val_int(sqlite3_column_int(stmt, i));\n");
     fprintf(out, "        else if (type == SQLITE_NULL) v = val_nil();\n");
-    fprintf(out, "        else v = val_str((const char*)sqlite3_column_text(stmt, i));\n");
+    fprintf(out, "        else v = val_str((char*)sqlite3_column_text(stmt, i));\n");
     fprintf(out, "        set_field(o, name, v);\n");
     fprintf(out, "      }\n");
     fprintf(out, "      nr_rt_push(a, o);\n");
@@ -116,7 +157,7 @@ static void print_runtime(FILE* out) {
     fprintf(out, "    sqlite3_finalize(stmt);\n");
     fprintf(out, "  }\n");
     fprintf(out, "  sqlite3_close(h); return a;\n");
-    fprintf(out, "}\n\n");
+    fprintf(out, "}\n");
     fprintf(out, "Value nr_rt_json_decode(Value s) {\n");
     fprintf(out, "  if (s.type != VAL_STR) return val_nil();\n");
     fprintf(out, "  char* p = s.data.s; while(*p == ' ' || *p == '[' || *p == ']') p++;\n");
@@ -137,12 +178,14 @@ static void print_runtime(FILE* out) {
     fprintf(out, "  server_fd = socket(AF_INET, SOCK_STREAM, 0);\n");
     fprintf(out, "  int opt = 1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));\n");
     fprintf(out, "  address.sin_family = AF_INET; address.sin_addr.s_addr = INADDR_ANY; address.sin_port = htons(port.data.i);\n");
-    fprintf(out, "  bind(server_fd, (struct sockaddr *)&address, sizeof(address)); listen(server_fd, 3);\n");
+    fprintf(out, "  if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) { perror(\"bind\"); close(server_fd); return val_nil(); }\n");
+    fprintf(out, "  if (listen(server_fd, 3) < 0) { perror(\"listen\"); close(server_fd); return val_nil(); }\n");
     fprintf(out, "  printf(\"HTTP Server listening on port %%d...\\n\", port.data.i);\n");
-    fprintf(out, "  while(1) { new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);\n");
+    fprintf(out, "  while(1) {\n    void* cp = nr_checkpoint();\n    new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);\n");
     fprintf(out, "    char buffer[30000] = {0}; int n = recv(new_socket, buffer, 30000, 0);\n");
-    fprintf(out, "    if (n <= 0) { close(new_socket); continue; }\n");
-    fprintf(out, "    char method[16], path[256]; sscanf(buffer, \"%%s %%s\", method, path);\n");
+    fprintf(out, "    if (n <= 0) { close(new_socket); nr_rollback(cp); continue; }\n");
+    fprintf(out, "    char method[16]={0}, path[1024]={0};\n");
+    fprintf(out, "    if(sscanf(buffer, \"%%15s %%1023s\", method, path) < 2) { close(new_socket); nr_rollback(cp); continue; }\n");
     fprintf(out, "    Value req = val_obj(); set_field(req, \"method\", val_str(method)); set_field(req, \"path\", val_str(path));\n");
     fprintf(out, "    char* body_ptr = strstr(buffer, \"\\r\\n\\r\\n\"); if (body_ptr) { body_ptr += 4; set_field(req, \"body\", val_str(body_ptr)); } else { set_field(req, \"body\", val_nil()); }\n");
     fprintf(out, "    Value res = ((Value (*)(Value, Value, Value, Value, Value, Value))callback.data.func_ptr)(val_nil(), req, val_nil(), val_nil(), val_nil(), val_nil());\n");
@@ -152,8 +195,9 @@ static void print_runtime(FILE* out) {
     fprintf(out, "      Value s = get_field(res, \"status\"); if (s.type == VAL_INT) status = s.data.i;\n");
     fprintf(out, "    }\n");
     fprintf(out, "    char response[32000];\n");
-    fprintf(out, "    sprintf(response, \"HTTP/1.1 %%d OK\\r\\nContent-Type: application/json\\r\\nContent-Length: %%ld\\r\\n\\r\\n%%s\", status, strlen(res_body), res_body);\n");
+    fprintf(out, "    snprintf(response, sizeof(response), \"HTTP/1.1 %%d OK\\r\\nContent-Type: application/json\\r\\nContent-Length: %%ld\\r\\n\\r\\n%%s\", status, strlen(res_body), res_body);\n");
     fprintf(out, "    send(new_socket, response, strlen(response), 0); close(new_socket);\n");
+    fprintf(out, "    nr_rollback(cp);\n");
     fprintf(out, "  } return val_nil();\n");
     fprintf(out, "}\n");
 }
@@ -390,12 +434,14 @@ void codegen_c_node(AstNode* node, FILE* out) {
             else { char p[256]; if (current_pref) { sprintf(p, "%s_%s", current_pref, node->data.var_name); if (is_function(p)) { fprintf(out, "val_func(nr_%s)", p); goto end; } else if (is_global(p)) { fprintf(out, "nr_v_%s", p); goto end; } } fprintf(out, "nr_v_%s", node->data.var_name); }
             end: break;
         case AST_LITERAL_INT: fprintf(out, "val_int(%d)", node->data.int_val); break;
+        case AST_LITERAL_FLOAT: fprintf(out, "val_float(%g)", node->data.float_val); break;
         case AST_LITERAL_STR: fprintf(out, "val_str(\"%s\")", node->data.str_val); break;
         case AST_LITERAL_BOOL: fprintf(out, "val_bool(%d)", node->data.int_val); break;
         case AST_LITERAL_NULL: fprintf(out, "val_nil()"); break;
         case AST_OBJECT: fprintf(out, "({ Value _o = val_obj(); "); for (AstField* f = node->data.object.fields; f; f = f->next) { fprintf(out, "set_field(_o, \"%s\", ", f->name); codegen_c_node(f->value, out); fprintf(out, "); "); } fprintf(out, "_o; })"); break;
         case AST_ARRAY: fprintf(out, "({ Value _a = val_arr(); "); for (int i=0; i<node->data.array.count; i++) { fprintf(out, "nr_rt_push(_a, "); codegen_c_node(node->data.array.elements[i], out); fprintf(out, "); "); } fprintf(out, "_a; })"); break;
         case AST_INDEX: fprintf(out, "nr_rt_at("); codegen_c_node(node->data.index.object, out); fprintf(out, ", "); codegen_c_node(node->data.index.index, out); fprintf(out, ")"); break;
+        case AST_INDEX_ASSIGN: fprintf(out, "nr_rt_set_at("); codegen_c_node(node->data.index_assign.object, out); fprintf(out, ", "); codegen_c_node(node->data.index_assign.index, out); fprintf(out, ", "); codegen_c_node(node->data.index_assign.value, out); fprintf(out, ")"); break;
         case AST_IMPORT: {
             const char* m = node->data.import_stmt.path;
             const char* alias = node->data.import_stmt.alias;
@@ -448,7 +494,9 @@ void codegen_c_node(AstNode* node, FILE* out) {
             else if (strcmp(n, "__builtin_str_index_of") == 0) { fprintf(out, "nr_rt_str_index_of("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[1], out); fprintf(out, ")"); }
             else if (strcmp(n, "__builtin_str_replace") == 0) { fprintf(out, "nr_rt_str_replace("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[1], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[2], out); fprintf(out, ")"); }
             else if (strcmp(n, "__builtin_str_match") == 0) { fprintf(out, "nr_rt_str_match("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[1], out); fprintf(out, ")"); }
+            else if (strcmp(n, "__builtin_obj_keys") == 0) { fprintf(out, "nr_rt_obj_keys("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ")"); }
             else if (strchr(n, '.')) {
+
                 char* t = strdup(n); char* d = strchr(t, '.'); *d = 0; const char* method = d + 1;
                 fprintf(out, "({ Value _t = nr_v_%s; Value _f = get_field(_t, \"%s\"); Value _r; ", t, method);
                 fprintf(out, "if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t");
@@ -618,9 +666,14 @@ void codegen_c_program(AstNode* node, FILE* out) {
     fprintf(out, "\n"); generate_functions(node, node, out); fprintf(out, "\n");
     AstNode* m_node = NULL; for (int i=0; i<node->data.program.count; i++) if (node->data.program.statements[i]->type == AST_FUNC_DECL && strcmp(node->data.program.statements[i]->data.func_decl.name, "main") == 0) { m_node = node->data.program.statements[i]; break; }
     if (m_node) {
-        fprintf(out, "int main(int argc, char** argv) {\n  srand(time(NULL));\n  nr_argc = argc; nr_argv = argv;\n  Value self = val_nil(); (void)self;\n");
+        fprintf(out, "int main(int argc, char** argv) {\n");
+        fprintf(out, "  nr_arena = malloc(sizeof(Arena)); nr_arena->blocks = NULL;\n");
+        fprintf(out, "  srand(time(NULL));\n  nr_argc = argc; nr_argv = argv;\n  Value self = val_nil(); (void)self;\n");
         for (int i=0; i<global_var_count; i++) fprintf(out, "  nr_v_%s = val_nil();\n", global_vars[i]);
-        current_pref = NULL; codegen_c_node(node, out); codegen_c_node(m_node->data.func_decl.body, out);
-        fprintf(out, "; return 0; }\n");
+        current_pref = NULL; 
+        codegen_c_node(node, out); 
+        codegen_c_node(m_node->data.func_decl.body, out);
+        fprintf(out, "\n  ArenaBlock* curr = nr_arena->blocks; while(curr) { ArenaBlock* next = curr->next; free(curr->ptr); free(curr); curr = next; } free(nr_arena);\n");
+        fprintf(out, "  return 0; \n}\n");
     }
 }

@@ -19,6 +19,11 @@ static char peek(Lexer* l) {
     return l->source[l->cursor];
 }
 
+static char peek_n(Lexer* l, int n) {
+    if (l->source[l->cursor] == '\0') return '\0';
+    return l->source[l->cursor + n];
+}
+
 static char advance(Lexer* l) {
     char c = l->source[l->cursor++];
     if (c == '\n') {
@@ -153,6 +158,10 @@ Token lexer_next_token(Lexer* l) {
     if (isdigit(c)) {
         int start = l->cursor - 1;
         while (isdigit(peek(l))) advance(l);
+        if (peek(l) == '.' && isdigit(peek_n(l, 1))) {
+            advance(l); // consume '.'
+            while (isdigit(peek(l))) advance(l);
+        }
         return make_token(l, TOKEN_NUMBER, l->cursor - start);
     }
 
@@ -262,6 +271,7 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_NULL: return "NULL";
         case TOKEN_KEYWORD_ERROR: return "ERROR";
         case TOKEN_KEYWORD_FN: return "FN";
+        case TOKEN_KEYWORD_PRINT: return "PRINT";
         case TOKEN_DOT: return "DOT";
         case TOKEN_OP_PLUS: return "PLUS";
         case TOKEN_OP_MINUS: return "MINUS";

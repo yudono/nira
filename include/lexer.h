@@ -52,6 +52,7 @@ typedef enum {
     TOKEN_OP_LT,      // <
     TOKEN_OP_GT,      // >
     TOKEN_KEYWORD_FN,
+    TOKEN_KEYWORD_PRINT,
 } TokenType;
 
 typedef struct {

@@ -1,7 +1,9 @@
 #include "../include/parser.h"
+#include "../include/arena.h"
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 static void advance(Parser* p) {
     p->previous = p->current;
@@ -55,15 +57,15 @@ static void consume(Parser* p, TokenType type, const char* msg) {
 }
 
 static char* copy_token_text(Token t) {
-    char* s = malloc(t.length + 1);
+    char* s = nr_malloc(t.length + 1);
     memcpy(s, t.text, t.length);
     s[t.length] = '\0';
     return s;
 }
 
 static char* strip_quotes(Token t) {
-    if (t.length < 2) return strdup("");
-    char* s = malloc(t.length - 1);
+    if (t.length < 2) return nr_strdup("");
+    char* s = nr_malloc(t.length - 1);
     memcpy(s, t.text + 1, t.length - 2);
     s[t.length - 2] = '\0';
     return s;
@@ -114,7 +116,7 @@ static AstNode* parse_object(Parser* p) {
             value->data.var_name = strdup(name);
         }
 
-        AstField* field = malloc(sizeof(AstField));
+        AstField* field = nr_malloc(sizeof(AstField));
         field->name = name;
         field->value = value;
         field->alias = alias;
@@ -132,38 +134,58 @@ static AstNode* parse_object(Parser* p) {
 
 static AstNode* parse_array(Parser* p) {
     AstNode* node = ast_new(AST_ARRAY, p->current);
-    AstNode* elements[64];
+    int capacity = 8;
     int count = 0;
+    AstNode** elements = nr_malloc(sizeof(AstNode*) * capacity);
+
     while (!check(p, TOKEN_RBRACKET) && !check(p, TOKEN_EOF)) {
         if (match(p, TOKEN_NEWLINE) || match(p, TOKEN_INDENT) || match(p, TOKEN_DEDENT)) continue;
+        
+        if (count >= capacity) {
+            int old_cap = capacity;
+            capacity *= 2;
+            elements = nr_realloc(elements, sizeof(AstNode*) * old_cap, sizeof(AstNode*) * capacity);
+        }
         elements[count++] = parse_expression(p);
         if (match(p, TOKEN_COMMA)) {}
     }
     consume(p, TOKEN_RBRACKET, "Expect ']' after array");
-    node->data.array.elements = malloc(sizeof(AstNode*) * count);
-    memcpy(node->data.array.elements, elements, sizeof(AstNode*) * count);
+    node->data.array.elements = elements;
     node->data.array.count = count;
     return node;
 }
 
 static AstNode* parse_primary(Parser* p) {
     if (match(p, TOKEN_NUMBER)) {
-        AstNode* node = ast_new(AST_LITERAL_INT, p->current);
-        node->data.int_val = atoi(p->previous.text);
-        return node;
+        bool is_float = false;
+        for (int i = 0; i < p->previous.length; i++) {
+            if (p->previous.text[i] == '.') {
+                is_float = true;
+                break;
+            }
+        }
+        if (is_float) {
+            AstNode* node = ast_new(AST_LITERAL_FLOAT, p->previous);
+            node->data.float_val = strtod(p->previous.text, NULL);
+            return node;
+        } else {
+            AstNode* node = ast_new(AST_LITERAL_INT, p->previous);
+            node->data.int_val = (int)strtol(p->previous.text, NULL, 10);
+            return node;
+        }
     }
     if (match(p, TOKEN_STRING)) {
-        AstNode* node = ast_new(AST_LITERAL_STR, p->current);
+        AstNode* node = ast_new(AST_LITERAL_STR, p->previous);
         node->data.str_val = strip_quotes(p->previous);
         return node;
     }
     if (match(p, TOKEN_TRUE) || match(p, TOKEN_FALSE)) {
-        AstNode* node = ast_new(AST_LITERAL_BOOL, p->current);
+        AstNode* node = ast_new(AST_LITERAL_BOOL, p->previous);
         node->data.int_val = (p->previous.type == TOKEN_TRUE);
         return node;
     }
     if (match(p, TOKEN_NULL)) {
-        return ast_new(AST_LITERAL_NULL, p->current);
+        return ast_new(AST_LITERAL_NULL, p->previous);
     }
     if (match(p, TOKEN_KEYWORD_ERROR)) {
         AstNode* node = ast_new(AST_ERROR, p->current);
@@ -180,16 +202,21 @@ static AstNode* parse_primary(Parser* p) {
         AstNode* node = ast_new(AST_FUNC_DECL, p->current);
         node->data.func_decl.name = strdup("anonymous");
         consume(p, TOKEN_LPAREN, "Expect '(' after 'fn'");
-        char* params[16];
+        int capacity = 8;
         int count = 0;
+        char** params = nr_malloc(sizeof(char*) * capacity);
         while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
             consume(p, TOKEN_IDENT, "Expect parameter name");
+            if (count >= capacity) {
+                int old_cap = capacity;
+                capacity *= 2;
+                params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+            }
             params[count++] = copy_token_text(p->previous);
             if (match(p, TOKEN_COMMA)) {}
         }
         consume(p, TOKEN_RPAREN, "Expect ')' after parameters");
-        node->data.func_decl.params = malloc(sizeof(char*) * count);
-        memcpy(node->data.func_decl.params, params, sizeof(char*) * count);
+        node->data.func_decl.params = params;
         node->data.func_decl.param_count = count;
         
         consume(p, TOKEN_COLON, "Expect ':' after anonymous function signature");
@@ -200,10 +227,16 @@ static AstNode* parse_primary(Parser* p) {
         return node;
     }
     if (match(p, TOKEN_LPAREN)) {
-        AstNode* args[16];
+        int capacity = 8;
         int count = 0;
+        AstNode** args = nr_malloc(sizeof(AstNode*) * capacity);
         if (!check(p, TOKEN_RPAREN)) {
             do {
+                if (count >= capacity) {
+                    int old_cap = capacity;
+                    capacity *= 2;
+                    args = nr_realloc(args, sizeof(AstNode*) * old_cap, sizeof(AstNode*) * capacity);
+                }
                 args[count++] = parse_expression(p);
             } while (match(p, TOKEN_COMMA));
         }
@@ -267,9 +300,15 @@ static AstNode* parse_primary(Parser* p) {
         if (match(p, TOKEN_LPAREN)) {
             AstNode* call = ast_new(AST_CALL, p->current);
             call->data.call.name = node->data.var_name;
-            AstNode* args[16];
+            int capacity = 8;
             int count = 0;
+            AstNode** args = nr_malloc(sizeof(AstNode*) * capacity);
             while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
+                if (count >= capacity) {
+                    int old_cap = capacity;
+                    capacity *= 2;
+                    args = nr_realloc(args, sizeof(AstNode*) * old_cap, sizeof(AstNode*) * capacity);
+                }
                 args[count++] = parse_expression(p);
                 if (match(p, TOKEN_COMMA)) {}
             }
@@ -293,8 +332,7 @@ static AstNode* parse_primary(Parser* p) {
                 return lambda;
             }
             
-            call->data.call.args = malloc(sizeof(AstNode*) * count);
-            memcpy(call->data.call.args, args, sizeof(AstNode*) * count);
+            call->data.call.args = args;
             call->data.call.arg_count = count;
             return call;
         }
@@ -409,6 +447,16 @@ static AstNode* parse_statement(Parser* p) {
     }
     if (match(p, TOKEN_KEYWORD_CONTINUE)) {
         return ast_new(AST_CONTINUE, p->current);
+    }
+
+    if (match(p, TOKEN_KEYWORD_PRINT)) {
+        Token ident = p->previous;
+        AstNode* node = ast_new(AST_CALL, ident);
+        node->data.call.name = strdup("print");
+        node->data.call.arg_count = 1;
+        node->data.call.args = nr_malloc(sizeof(AstNode*));
+        node->data.call.args[0] = parse_expression(p);
+        return node;
     }
 
     if (match(p, TOKEN_KEYWORD_RETURN)) {
@@ -590,14 +638,20 @@ static AstNode* parse_statement(Parser* p) {
             node->data.func_decl.is_exported = is_exported;
             node->data.func_decl.is_unpacking = 0;
             
-            char* params[16];
+            int capacity = 8;
             int count = 0;
+            char** params = nr_malloc(sizeof(char*) * capacity);
             
             if (match(p, TOKEN_LPAREN)) {
                 if (match(p, TOKEN_LBRACE)) {
                     node->data.func_decl.is_unpacking = 1;
                     while (!check(p, TOKEN_RBRACE) && !check(p, TOKEN_EOF)) {
                         consume(p, TOKEN_IDENT, "Expect parameter name");
+                        if (count >= capacity) {
+                            int old_cap = capacity;
+                            capacity *= 2;
+                            params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                        }
                         params[count++] = copy_token_text(p->previous);
                         if (match(p, TOKEN_COMMA)) {}
                     }
@@ -605,6 +659,11 @@ static AstNode* parse_statement(Parser* p) {
                 } else {
                     while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
                         consume(p, TOKEN_IDENT, "Expect parameter name");
+                        if (count >= capacity) {
+                            int old_cap = capacity;
+                            capacity *= 2;
+                            params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                        }
                         params[count++] = copy_token_text(p->previous);
                         if (match(p, TOKEN_COMMA)) {}
                     }
@@ -614,13 +673,17 @@ static AstNode* parse_statement(Parser* p) {
                 // Command-style parameters: IDENT p1 p2:
                 while (check(p, TOKEN_IDENT)) {
                     advance(p);
+                    if (count >= capacity) {
+                        int old_cap = capacity;
+                        capacity *= 2;
+                        params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                    }
                     params[count++] = copy_token_text(p->previous);
                     if (match(p, TOKEN_COMMA)) {}
                 }
             }
             
-            node->data.func_decl.params = malloc(sizeof(char*) * count);
-            memcpy(node->data.func_decl.params, params, sizeof(char*) * count);
+            node->data.func_decl.params = params;
             node->data.func_decl.param_count = count;
             
             consume(p, TOKEN_COLON, "Expect ':' after function signature");
@@ -665,17 +728,22 @@ static AstNode* parse_statement(Parser* p) {
 
 AstNode* parse_program(Parser* p) {
     AstNode* node = ast_new(AST_PROGRAM, p->current);
-    AstNode* stats[128];
+    int capacity = 32;
     int count = 0;
+    AstNode** stats = nr_malloc(sizeof(AstNode*) * capacity);
     while (!check(p, TOKEN_EOF)) {
         if (match(p, TOKEN_NEWLINE)) continue;
         if (check(p, TOKEN_DEDENT)) break;
+        if (count >= capacity) {
+            int old_cap = capacity;
+            capacity *= 2;
+            stats = nr_realloc(stats, sizeof(AstNode*) * old_cap, sizeof(AstNode*) * capacity);
+        }
         AstNode* stmt = parse_statement(p);
         if (stmt) stats[count++] = stmt;
         else if (!check(p, TOKEN_DEDENT) && !check(p, TOKEN_EOF)) advance(p); 
     }
-    node->data.program.statements = malloc(sizeof(AstNode*) * count);
-    memcpy(node->data.program.statements, stats, sizeof(AstNode*) * count);
+    node->data.program.statements = stats;
     node->data.program.count = count;
     return node;
 }
