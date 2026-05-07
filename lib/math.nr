@@ -21,5 +21,17 @@ export sum items:
     total = total + item
   return total
 
+export sqrt n:
+  return __builtin_math_sqrt(n)
+
+export pow b, e:
+  return __builtin_math_pow(b, e)
+
+export sin n:
+  return __builtin_math_sin(n)
+
+export cos n:
+  return __builtin_math_cos(n)
+
 export random:
   return __builtin_random()

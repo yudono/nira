@@ -67,41 +67,91 @@ items = [1, 2, 3]
 ```
 
 ### Imports
-Modules are imported using `import "name"`.
+Nira distinguishes between workspace files, internal libraries, and external dependencies.
+
+#### 1. Workspace Import
+Use quotes to import a local file relative to the project root.
 ```nira
-import "http"
-import "json"
+import "config/config"  # Imports config/config.nr
+```
+
+#### 2. Library & Dependency Import
+Use identifiers without quotes for internal libraries (built-in) or external dependencies (found in `.nira/libs/*`).
+```nira
+import time  # Internal library
+import os    # Internal library
+import requests # External dependency
+```
+
+#### 3. Specific Imports (`from`)
+You can import specific functions or variables from a module.
+```nira
+from time import millis
+from "config/config" import db
 ```
 
 ---
 
 ## 📦 Standard Library
 
-### HTTP
-The `http` module provides a zero-dependency web server.
+Nira provides a rich set of built-in modules to accelerate development.
+
+### **1. Input/Output & Files (`nira.io`, `nira.fs`)**
 ```nira
-import "http"
+import io
+import fs
 
 main:
+  print("Enter your name: ")
+  name = io.input()
+  fs.writeFile("name.txt", name)
+  println("Saved!")
+```
+
+### **2. Networking (`nira.http`, `nira.net`)**
+The `http` module provides a zero-dependency web server and client.
+```nira
+import http
+
+main:
+  # Client
+  res = http.get("https://api.example.com")
+  
+  # Server
   app = http.app()
-  app.get("/", ctx -> ctx.json({ message: "Hello World" }))
+  app.get("/", ctx -> ctx.json({ status: "ok" }))
   app.listen(3000)
 ```
 
-### Database (SQLite)
-The `task` library (in examples) demonstrates SQLite usage.
+### **3. Data Encoding (`nira.json`, `nira.encoding`)**
 ```nira
-_db = db.open("data.db")
-_db.exec("INSERT INTO users (name) VALUES (?)", ["Budi"])
-results = _db.query("SELECT * FROM users")
+import json
+
+main:
+  data = { id: 1, tags: ["new", "fast"] }
+  str = json.encode(data)
+  obj = json.decode(str)
 ```
 
-### JSON
+### **4. Concurrency (`nira.async`, `nira.sync`)**
 ```nira
-data = { name: "Budi" }
-encoded = json.encode(data)
-decoded = json.decode(encoded)
+import async
+
+fetchData:
+  return http.get("/data")
+
+main:
+  p1 = async.spawn(fetchData)
+  p2 = async.spawn(fetchData)
+  results = async.all([p1, p2])
 ```
+
+### **5. Other Modules**
+- **nira.math**: Constants like `PI` and functions like `sqrt`, `random`.
+- **nira.time**: `now()`, `unix()`, and `sleep(ms)`.
+- **nira.os**: `getEnv()`, `exit()`, and platform info.
+- **nira.crypto**: Hashing (`sha256`) and secure random.
+- **nira.test**: Built-in test runner with `describe` and `expect`.
 
 ---
 

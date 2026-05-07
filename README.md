@@ -30,6 +30,21 @@ Nira achieves sub-5ms performance through surgical architectural optimizations:
 - **Modular**: Robust `import`/`export` system with package management.
 - **Zero Leak Memory**: Managed via a high-speed Arena Allocator with checkpoint/rollback.
 
+## 📦 Standard Library
+
+Nira comes with a comprehensive standard library designed for modern application development:
+
+- **io/fs**: Terminal I/O and robust file system operations.
+- **core**: Advanced String, Array, Map, Set, and Buffer manipulation.
+- **math**: High-performance math constants and functions.
+- **time**: Timestamps, formatting, and precision sleep.
+- **os/path**: Environment, process control, and path manipulation.
+- **net/http**: Zero-dependency HTTP client/server and networking.
+- **encoding**: Native support for JSON, Base64, Hex, and CSV.
+- **crypto**: Secure hashing (SHA256, etc.) and HMAC.
+- **sync/async**: Modern concurrency with spawn, mutex, and channels.
+- **reflect/test**: Runtime inspection and a built-in testing framework.
+
 ## 🕹️ CLI Usage
 
 ### Running a script (Interpreter)

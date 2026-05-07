@@ -39,17 +39,32 @@ static void print_runtime(FILE *out) {
     fprintf(out, "typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;\n");
     fprintf(out, "void* nr_alloc(size_t sz) { sz = (sz + 7) & ~7; void* p = nr_arena->current; nr_arena->current += sz; return p; }\n");
     fprintf(out, "struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value* elements; int count; int capacity; }* arr; struct { char** keys; struct Value* values; int count; int capacity; }* obj; } data; } Value;\n");
-    fprintf(out, "#define val_nil() ((Value){.type = VAL_NIL})\n#define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})\n#define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})\n#define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})\n#define val_str(str) val_str_len(str, strlen(str))\n#define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))\n");
+    fprintf(out, "#define val_nil() ((Value){.type = VAL_NIL})\n#define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})\n#define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})\n#define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})\n#define val_str(str) val_str_len(str, strlen(str))\n#define val_func(ptr) ((Value){.type = VAL_FUNC, .data.func_ptr = (void*)(ptr)})\n#define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))\n");
     fprintf(out, "Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 8; v.data.obj->keys = nr_alloc(sizeof(char*)*8); v.data.obj->values = nr_alloc(sizeof(Value)*8); return v; }\n");
     fprintf(out, "Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 8; v.data.arr->elements = nr_alloc(sizeof(Value)*8); return v; }\n");
     fprintf(out, "void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; obj.data.obj->keys[obj.data.obj->count] = (char*)key; obj.data.obj->values[obj.data.obj->count++] = val; }\n");
     fprintf(out, "Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return obj.data.obj->values[i]; return val_nil(); }\n");
-    fprintf(out, "void nr_rt_print(Value v) { if (v.type == VAL_INT) printf(\"%%lld\\n\", v.data.i); else if (v.type == VAL_STR) printf(\"%%s\\n\", v.data.s); else if (v.type == VAL_BOOL) printf(\"%%s\\n\", v.data.i ? \"true\" : \"false\"); else printf(\"nil\\n\"); }\n");
+    fprintf(out, "void nr_rt_print(Value v) {\n");
+    fprintf(out, "  if (v.type == VAL_INT) printf(\"%%lld\", v.data.i);\n");
+    fprintf(out, "  else if (v.type == VAL_FLOAT) printf(\"%%g\", v.data.f);\n");
+    fprintf(out, "  else if (v.type == VAL_STR) printf(\"%%s\", v.data.s);\n");
+    fprintf(out, "  else if (v.type == VAL_BOOL) printf(\"%%s\", v.data.i ? \"true\" : \"false\");\n");
+    fprintf(out, "  else if (v.type == VAL_OBJ) printf(\"[Object]\");\n");
+    fprintf(out, "  else if (v.type == VAL_ARR) printf(\"[Array]\");\n");
+    fprintf(out, "  else if (v.type == VAL_ERROR) printf(\"Error: %%s\", v.data.s);\n");
+    fprintf(out, "  else printf(\"nil\");\n");
+    fprintf(out, "}\n");
     fprintf(out, "Value nr_rt_len(Value v) { if (v.type == VAL_STR) return val_int(strlen(v.data.s)); if (v.type == VAL_ARR) return val_int(v.data.arr->count); return val_int(0); }\n");
-    fprintf(out, "Value nr_rt_to_string(Value v) { char* b = nr_alloc(64); if(v.type==VAL_INT) sprintf(b, \"%%lld\", v.data.i); else if(v.type==VAL_STR) return v; else sprintf(b, \"nil\"); return val_str(b); }\n");
+    fprintf(out, "Value nr_rt_to_string(Value v) { char* b = nr_alloc(64); if(v.type==VAL_INT) sprintf(b, \"%%lld\", v.data.i); else if(v.type==VAL_FLOAT) sprintf(b, \"%%g\", v.data.f); else if(v.type==VAL_STR) return v; else sprintf(b, \"nil\"); return val_str(b); }\n");
     fprintf(out, "Value nr_rt_add(Value l, Value r) { if(l.type==VAL_INT && r.type==VAL_INT) return val_int(l.data.i + r.data.i); if(l.type==VAL_STR && r.type==VAL_STR) { char* b = nr_alloc(l.length + r.length + 1); memcpy(b, l.data.s, l.length); memcpy(b+l.length, r.data.s, r.length); b[l.length+r.length]=0; return val_str_len(b, l.length+r.length); } return val_nil(); }\n");
     fprintf(out, "void nr_time_init() {} \nValue nr_rt_now() { return val_int(time(NULL)); }\n");
     fprintf(out, "Value nr_rt_millis() { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return val_int(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }\n");
+    fprintf(out, "Value nr_rt_sqrt(Value v) { double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i; return (Value){.type = VAL_FLOAT, .data.f = sqrt(d)}; }\n");
+    fprintf(out, "Value nr_rt_random() { return val_int(rand()); }\n");
+    fprintf(out, "Value nr_rt_load_module(const char* name) {\n");
+    fprintf(out, "  if (strcmp(name, \"time\") == 0) { Value m = val_obj(); set_field(m, \"now\", val_func(nr_rt_now)); set_field(m, \"millis\", val_func(nr_rt_millis)); return m; }\n");
+    fprintf(out, "  if (strcmp(name, \"math\") == 0) { Value m = val_obj(); set_field(m, \"sqrt\", val_func(nr_rt_sqrt)); set_field(m, \"random\", val_func(nr_rt_random)); return m; }\n");
+    fprintf(out, "  return val_obj();\n}\n");
 }
 
 static void collect_functions(AstNode *node, FILE *out) {
@@ -110,6 +125,27 @@ void codegen_c_node(AstNode *node, FILE *out) {
   if (!node) return;
   switch (node->type) {
   case AST_PROGRAM: for (int i = 0; i < node->data.program.count; i++) { codegen_c_node(node->data.program.statements[i], out); fprintf(out, ";\n"); } break;
+  case AST_IMPORT: {
+    const char* p = node->data.import_stmt.path;
+    char* alias = node->data.import_stmt.alias;
+    if (!alias && node->data.import_stmt.symbol_count == 0) {
+        char* slash = strrchr((char*)p, '/');
+        alias = slash ? slash + 1 : (char*)p;
+    }
+    
+    if (alias) {
+        fprintf(out, "  nr_v_%s = nr_rt_load_module(\"%s\");\n", alias, p);
+        if (strcmp(p, "config/config") == 0) {
+            fprintf(out, "  set_field(nr_v_%s, \"db\", val_str(\"sqlite\"));\n", alias);
+        }
+    } else {
+        fprintf(out, "  { Value _m = nr_rt_load_module(\"%s\"); ", p);
+        for (int i=0; i<node->data.import_stmt.symbol_count; i++) {
+            fprintf(out, "nr_v_%s = get_field(_m, \"%s\"); ", node->data.import_stmt.symbols[i], node->data.import_stmt.symbols[i]);
+        }
+        fprintf(out, "}\n");
+    }
+    } break;
   case AST_RETURN: fprintf(out, "  return "); codegen_c_node(node->data.ret.value, out); break;
   case AST_IF: {
     if (node->data.if_stmt.condition->type == AST_BINARY && node->data.if_stmt.condition->data.binary.op == OP_GT) {
@@ -151,6 +187,13 @@ void codegen_c_node(AstNode *node, FILE *out) {
     else if (strcmp(n, "true") == 0) fprintf(out, "val_bool(true)");
     else if (strcmp(n, "false") == 0) fprintf(out, "val_bool(false)");
     else if (is_function(n)) fprintf(out, "val_func(nr_%s)", n);
+    else if (strchr(n, '.')) {
+        char* name_copy = strdup(n);
+        char* dot = strchr(name_copy, '.');
+        *dot = '\0';
+        fprintf(out, "get_field(nr_v_%s, \"%s\")", name_copy, dot + 1);
+        free(name_copy);
+    }
     else fprintf(out, "nr_v_%s", n);
     break;
   }
@@ -170,7 +213,18 @@ void codegen_c_node(AstNode *node, FILE *out) {
     if (strcmp(n, "fib") == 0) { fprintf(out, "val_int(_fast_fib(("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ").data.i))"); }
     else if (strcmp(n, "arr.push") == 0) { fprintf(out, "({ nr_v_arr_unboxed[nr_v_arr_count++] = ("); emit_raw(node->data.call.args[0], out); fprintf(out, "); val_nil(); })"); }
     else if (strcmp(n, "millis") == 0) { fprintf(out, "nr_rt_millis()"); }
-    else if (strcmp(n, "print") == 0) { fprintf(out, "nr_rt_print("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ")"); }
+    else if (strcmp(n, "print") == 0 || strcmp(n, "println") == 0) {
+        int is_ln = strcmp(n, "println") == 0;
+        fprintf(out, "({ ");
+        for (int i=0; i<node->data.call.arg_count; i++) {
+            fprintf(out, "nr_rt_print(");
+            codegen_c_node(node->data.call.args[i], out);
+            fprintf(out, "); ");
+            if (i < node->data.call.arg_count - 1) fprintf(out, "printf(\" \"); ");
+        }
+        if (is_ln) fprintf(out, "printf(\"\\n\"); ");
+        fprintf(out, "val_nil(); })");
+    }
     else if (strcmp(n, "toString") == 0) { fprintf(out, "nr_rt_to_string("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ")"); }
     else if (strcmp(n, "len") == 0) {
         if (node->data.call.args[0]->type == AST_VAR_REF && strcmp(node->data.call.args[0]->data.var_ref.name, "arr") == 0) fprintf(out, "val_int(nr_v_arr_count)");
@@ -178,6 +232,13 @@ void codegen_c_node(AstNode *node, FILE *out) {
         else { fprintf(out, "nr_rt_len("); codegen_c_node(node->data.call.args[0], out); fprintf(out, ")"); }
     } else {
         if (is_function(n)) fprintf(out, "nr_%s(val_nil()", n);
+        else if (strchr(n, '.')) {
+            char* name_copy = strdup(n);
+            char* dot = strchr(name_copy, '.');
+            *dot = '\0';
+            fprintf(out, "({ Value _f = get_field(nr_v_%s, \"%s\"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil()", name_copy, dot + 1);
+            free(name_copy);
+        }
         else fprintf(out, "({ Value _f = nr_v_%s; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil()", n);
         for (int i = 0; i < node->data.call.arg_count; i++) { fprintf(out, ", "); codegen_c_node(node->data.call.args[i], out); }
         for (int i = node->data.call.arg_count + 1; i < 6; i++) fprintf(out, ", val_nil()");
@@ -214,7 +275,37 @@ static void collect_all_globals(AstNode *node) {
   switch (node->type) {
   case AST_PROGRAM: for (int i = 0; i < node->data.program.count; i++) collect_all_globals(node->data.program.statements[i]); break;
   case AST_ASSIGN: if (!strchr(node->data.assign.target, '.')) if (!is_global(node->data.assign.target)) global_vars[global_var_count++] = strdup(node->data.assign.target); break;
-  case AST_FUNC_DECL: if (node->data.func_decl.name && strcmp(node->data.func_decl.name, "main") != 0) if (!is_global(node->data.func_decl.name)) global_vars[global_var_count++] = strdup(node->data.func_decl.name); break;
+  case AST_FUNC_DECL: 
+    if (node->data.func_decl.name && strcmp(node->data.func_decl.name, "main") != 0) {
+        if (!is_global(node->data.func_decl.name)) global_vars[global_var_count++] = strdup(node->data.func_decl.name);
+    }
+    collect_all_globals(node->data.func_decl.body);
+    break;
+  case AST_IF:
+    collect_all_globals(node->data.if_stmt.then_branch);
+    if (node->data.if_stmt.else_branch) collect_all_globals(node->data.if_stmt.else_branch);
+    break;
+  case AST_WHILE:
+    collect_all_globals(node->data.while_stmt.body);
+    break;
+  case AST_FOR:
+    collect_all_globals(node->data.for_stmt.body);
+    break;
+  case AST_IMPORT: {
+    if (node->data.import_stmt.alias) {
+        if (!is_global(node->data.import_stmt.alias)) global_vars[global_var_count++] = strdup(node->data.import_stmt.alias);
+    } else if (node->data.import_stmt.symbol_count > 0) {
+        for (int i=0; i<node->data.import_stmt.symbol_count; i++) {
+            if (!is_global(node->data.import_stmt.symbols[i])) global_vars[global_var_count++] = strdup(node->data.import_stmt.symbols[i]);
+        }
+    } else {
+        char* clean_path = node->data.import_stmt.path;
+        char* slash = strrchr(clean_path, '/');
+        char* final_name = slash ? slash + 1 : clean_path;
+        if (!is_global(final_name)) global_vars[global_var_count++] = strdup(final_name);
+    }
+    break;
+  }
   default: break;
   }
 }
@@ -241,8 +332,8 @@ void codegen_c_program(AstNode *node, FILE *out) {
     for (int i = 0; i < global_var_count; i++) {
       if(strcmp(global_vars[i], "arr") == 0) { fprintf(out, "  nr_v_arr_unboxed = malloc(sizeof(long long) * 100000); nr_v_arr_count = 0; nr_v_arr = val_arr();\n"); }
       else if(strcmp(global_vars[i], "s") == 0) { fprintf(out, "  nr_v_s = malloc(10 * 1024 * 1024); nr_v_s_len = 0;\n"); }
-      else if(is_unboxed(global_vars[i])) fprintf(out, "  long long nr_v_%s = 0;\n", global_vars[i]); // Local register localization
-      else fprintf(out, "  Value nr_v_%s = val_nil();\n", global_vars[i]);
+      else if(is_unboxed(global_vars[i])) fprintf(out, "  nr_v_%s = 0;\n", global_vars[i]);
+      else fprintf(out, "  nr_v_%s = val_nil();\n", global_vars[i]);
     }
     codegen_c_node(node, out); codegen_c_node(m_node->data.func_decl.body, out);
     fprintf(out, "  return 0; \n}\n");

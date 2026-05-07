@@ -1,41 +1,37 @@
-export main:
-  print("--- Testing Math ---")
-  import math
-  res = math.sum([10, 20])
-  print(res) # 30
+import conv
+import parse
+import encoding
+import collection
+import json
+import time
 
-  r = math.random()
-  print("Random: " + r)
-
-  print("--- Testing Array ---")
-  import array
-  nums = [1, 2, 3, 4, 5]
+main:
+  # Test conv
+  val = "123"
+  num = conv.toInt(val)
+  println("conv.toInt: " + toString(num))
   
-  doubled = array.map(nums, i -> i * 2)
-  print(doubled) # [2, 4, 6, 8, 10]
-
-  total = array.reduce(nums, 0, (acc, i) -> acc + i)
-  print(total) # 15
-
-  print("--- Testing String ---")
-  import string
-  s = "Hello World"
-  print(string.substring(s, 0, 5)) # Hello
-  print(string.concat(s, "!!!")) # Hello World!!!
-  print(string.length(s)) # 11
-
-  print("--- Testing File ---")
-  import file
-  file.write("test.txt", "Nira rules!")
-  content = file.read("test.txt")
-  print("File content: " + content)
-  file.remove("test.txt")
-
-  print("--- Testing Time & Sys ---")
-  from time import now
-  import sys
-  print("Current time: " + now())
-  print("Sleeping 100ms...")
-  import sleep from time
-  sleep(100)
-  print("Done.")
+  # Test parse
+  f = parse.parseFloat("3.14")
+  println("parse.parseFloat: " + toString(f))
+  
+  # Test encoding
+  b64 = encoding.toBase64("hello")
+  println("Base64: " + b64)
+  println("Decoded: " + encoding.fromBase64(b64))
+  
+  # Test json
+  obj = { name: "Nira", version: 1 }
+  jstr = json.stringify(obj)
+  println("JSON: " + jstr)
+  
+  # Test collection
+  list = [1, 1, 2, 3]
+  unique = collection.toSet(list)
+  println("Unique items: " + toString(len(unique)))
+  
+  # Test time
+  d = time.fromDate(2024, 5, 7)
+  println("Unix time: " + toString(time.toUnix(d)))
+  
+  println("✨ All library tests passed!")

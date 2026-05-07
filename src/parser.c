@@ -243,7 +243,7 @@ static AstNode* parse_object(Parser* p) {
             value = parse_expression(p);
         } else {
             value = ast_new(AST_VAR_REF, p->previous);
-            value->data.var_ref.name = strdup(name);
+            value->data.var_ref.name = nr_strdup(name);
         }
 
         AstField* field = nr_malloc(sizeof(AstField));
@@ -330,7 +330,7 @@ static AstNode* parse_primary(Parser* p) {
     }
     if (match(p, TOKEN_KEYWORD_FN)) {
         AstNode* node = ast_new(AST_FUNC_DECL, p->current);
-        node->data.func_decl.name = strdup("anonymous");
+        node->data.func_decl.name = nr_strdup("anonymous");
         
         int capacity = 8;
         int count = 0;
@@ -380,16 +380,16 @@ static AstNode* parse_primary(Parser* p) {
         consume(p, TOKEN_RPAREN, "Expect ')' after expression");
 
         if (match(p, TOKEN_ARROW)) {
-            char** params = malloc(sizeof(char*) * count);
+            char** params = nr_malloc(sizeof(char*) * count);
             for (int i=0; i<count; i++) {
                 if (args[i]->type != AST_VAR_REF) {
                     report_error(p, p->previous, "Lambda parameters must be identifiers");
                 } else {
-                    params[i] = strdup(args[i]->data.var_ref.name);
+                    params[i] = nr_strdup(args[i]->data.var_ref.name);
                 }
             }
             AstNode* lambda = ast_new(AST_FUNC_DECL, p->current);
-            lambda->data.func_decl.name = strdup("anonymous");
+            lambda->data.func_decl.name = nr_strdup("anonymous");
             lambda->data.func_decl.params = params;
             lambda->data.func_decl.param_count = count;
             lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
@@ -438,10 +438,10 @@ static AstNode* parse_primary(Parser* p) {
         }
 
         if (match(p, TOKEN_ARROW)) {
-            char** params = malloc(sizeof(char*));
+            char** params = nr_malloc(sizeof(char*));
             params[0] = node->data.var_ref.name;
             AstNode* lambda = ast_new(AST_FUNC_DECL, p->current);
-            lambda->data.func_decl.name = strdup("anonymous");
+            lambda->data.func_decl.name = nr_strdup("anonymous");
             lambda->data.func_decl.params = params;
             lambda->data.func_decl.param_count = 1;
             lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
@@ -453,7 +453,7 @@ static AstNode* parse_primary(Parser* p) {
             if (node->type == AST_VAR_REF) {
                 call->data.call.name = node->data.var_ref.name;
             } else {
-                call->data.call.name = strdup("anonymous"); // Or handle function pointers later
+                call->data.call.name = nr_strdup("anonymous"); // Or handle function pointers later
             }
             int capacity = 8;
             int count = 0;
@@ -476,16 +476,16 @@ static AstNode* parse_primary(Parser* p) {
             
             if (match(p, TOKEN_ARROW)) {
                 // (p1, p2) -> body
-                char** params = malloc(sizeof(char*) * count);
+                char** params = nr_malloc(sizeof(char*) * count);
                 for (int i=0; i<count; i++) {
                     if (args[i]->type != AST_VAR_REF) {
                         report_error(p, p->previous, "Lambda parameters must be identifiers");
                     } else {
-                        params[i] = strdup(args[i]->data.var_ref.name);
+                        params[i] = nr_strdup(args[i]->data.var_ref.name);
                     }
                 }
                 AstNode* lambda = ast_new(AST_FUNC_DECL, p->current);
-                lambda->data.func_decl.name = strdup("anonymous");
+                lambda->data.func_decl.name = nr_strdup("anonymous");
                 lambda->data.func_decl.params = params;
                 lambda->data.func_decl.param_count = count;
                 lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
@@ -778,8 +778,17 @@ static AstNode* parse_statement(Parser* p) {
 
     if (match(p, TOKEN_KEYWORD_FROM)) {
         // from module import { symbols }
-        consume(p, TOKEN_IDENT, "Expect module name after 'from'");
-        char* path = copy_token_text(p->previous);
+        // from "path" import { symbols }
+        char* path;
+        int is_library = 0;
+        if (match(p, TOKEN_STRING)) {
+            path = strip_quotes(p->previous);
+            is_library = 0;
+        } else {
+            consume(p, TOKEN_IDENT, "Expect module name after 'from'");
+            path = copy_token_text(p->previous);
+            is_library = 1;
+        }
         consume(p, TOKEN_KEYWORD_IMPORT, "Expect 'import' after module name");
         
         char* symbols[32];
@@ -802,9 +811,10 @@ static AstNode* parse_statement(Parser* p) {
 
         AstNode* node = ast_new(AST_IMPORT, p->previous);
         node->data.import_stmt.path = path;
+        node->data.import_stmt.is_library = is_library;
         node->data.import_stmt.symbol_count = count;
         if (count > 0) {
-            node->data.import_stmt.symbols = malloc(sizeof(char*) * count);
+            node->data.import_stmt.symbols = nr_malloc(sizeof(char*) * count);
             memcpy(node->data.import_stmt.symbols, symbols, sizeof(char*) * count);
         }
         return node;
@@ -837,18 +847,22 @@ static AstNode* parse_statement(Parser* p) {
         }
 
         char* path;
+        int is_library = 0;
         if (match(p, TOKEN_STRING)) {
             path = strip_quotes(p->previous);
+            is_library = 0;
         } else {
             consume(p, TOKEN_IDENT, "Expect module name or string path");
             path = copy_token_text(p->previous);
+            is_library = 1;
         }
 
         AstNode* node = ast_new(AST_IMPORT, p->previous);
         node->data.import_stmt.path = path;
+        node->data.import_stmt.is_library = is_library;
         node->data.import_stmt.symbol_count = count;
         if (count > 0) {
-            node->data.import_stmt.symbols = malloc(sizeof(char*) * count);
+            node->data.import_stmt.symbols = nr_malloc(sizeof(char*) * count);
             memcpy(node->data.import_stmt.symbols, symbols, sizeof(char*) * count);
         }
 

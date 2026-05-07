@@ -459,6 +459,54 @@ static void report_runtime_error(AstNode* node, Environment* env, const char* na
 }
 
 // --- Helpers ---
+static const char base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+char* base64_encode(const unsigned char* data, size_t input_length) {
+    size_t output_length = 4 * ((input_length + 2) / 3);
+    char* encoded_data = nr_malloc(output_length + 1);
+    for (size_t i = 0, j = 0; j < output_length;) {
+        uint32_t octet_a = i < input_length ? data[i++] : 0;
+        uint32_t octet_b = i < input_length ? data[i++] : 0;
+        uint32_t octet_c = i < input_length ? data[i++] : 0;
+        uint32_t triple = (octet_a << 16) + (octet_b << 8) + octet_c;
+        encoded_data[j++] = base64_table[(triple >> 18) & 0x3F];
+        encoded_data[j++] = base64_table[(triple >> 12) & 0x3F];
+        if (j < output_length) {
+            encoded_data[j++] = (i > input_length + 1) ? '=' : base64_table[(triple >> 6) & 0x3F];
+        }
+        if (j < output_length) {
+            encoded_data[j++] = (i > input_length) ? '=' : base64_table[triple & 0x3F];
+        }
+    }
+    encoded_data[output_length] = '\0';
+    return encoded_data;
+}
+
+unsigned char* base64_decode(const char* data, size_t input_length, size_t* output_length) {
+    if (input_length % 4 != 0) return NULL;
+    *output_length = input_length / 4 * 3;
+    if (data[input_length - 1] == '=') (*output_length)--;
+    if (data[input_length - 2] == '=') (*output_length)--;
+    unsigned char* decoded_data = nr_malloc(*output_length + 1);
+    static char decoding_table[256];
+    static int table_built = 0;
+    if (!table_built) {
+        for (int i = 0; i < 64; i++) decoding_table[(unsigned char)base64_table[i]] = i;
+        table_built = 1;
+    }
+    for (size_t i = 0, j = 0; i < input_length;) {
+        uint32_t sextet_a = data[i] == '=' ? 0 : decoding_table[(unsigned char)data[i++]];
+        uint32_t sextet_b = data[i] == '=' ? 0 : decoding_table[(unsigned char)data[i++]];
+        uint32_t sextet_c = data[i] == '=' ? 0 : decoding_table[(unsigned char)data[i++]];
+        uint32_t sextet_d = data[i] == '=' ? 0 : decoding_table[(unsigned char)data[i++]];
+        uint32_t triple = (sextet_a << 18) + (sextet_b << 12) + (sextet_c << 6) + sextet_d;
+        if (j < *output_length) decoded_data[j++] = (triple >> 16) & 0xFF;
+        if (j < *output_length) decoded_data[j++] = (triple >> 8) & 0xFF;
+        if (j < *output_length) decoded_data[j++] = triple & 0xFF;
+    }
+    decoded_data[*output_length] = '\0';
+    return decoded_data;
+}
 
 static char* read_file_internal(const char* path) {
     FILE* file = fopen(path, "rb");
@@ -635,12 +683,10 @@ static Value eval_binary(AstNode* node, Environment* env) {
         }
         
         if (right.type == VAL_STR) {
-            char* res = malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
+            char* res = nr_malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
             strcpy(res, left.data.s);
             strcat(res, right.data.s);
-            Value v = val_str(res);
-            free(res);
-            return v;
+            return val_str(res);
         }
     }
     
@@ -746,7 +792,11 @@ static Value eval_call(AstNode* node, Environment* env) {
                 for (int i=0; i<node->data.call.arg_count && i < decl->data.func_decl.param_count; i++) {
                     Value arg = EVAL_FAST(node->data.call.args[i], env);
                     if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-                    env_define(call_env, decl->data.func_decl.params[i], arg);
+                    if (call_env->slots && i < call_env->slot_count) {
+                        call_env->slots[i] = arg;
+                    } else {
+                        env_define(call_env, decl->data.func_decl.params[i], arg);
+                    }
                 }
                 Value res = EVAL_FAST(decl->data.func_decl.body, call_env);
                 /* free(full_name); (arena managed) */
@@ -757,21 +807,24 @@ static Value eval_call(AstNode* node, Environment* env) {
         }
     } else {
         // Built-ins
-        if (strcmp(full_name, "print") == 0) {
+        if (strcmp(full_name, "print") == 0 || strcmp(full_name, "println") == 0) {
+            int is_println = strcmp(full_name, "println") == 0;
             for (int i=0; i<node->data.call.arg_count; i++) {
                 Value arg = EVAL_FAST(node->data.call.args[i], env);
                 if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-                if (arg.type == VAL_INT) printf("%lld\n", arg.data.i);
-                else if (arg.type == VAL_FLOAT) printf("%g\n", arg.data.f);
-                else if (arg.type == VAL_BOOL) printf("%s\n", arg.data.i ? "true" : "false");
-                else if (arg.type == VAL_STR) printf("%s\n", arg.data.s);
-                else if (arg.type == VAL_OBJ) printf("[Object]\n");
-                else if (arg.type == VAL_ARR) printf("[Array]\n");
-                else if (arg.type == VAL_ERROR) printf("Error: %s\n", arg.data.s);
-                else printf("nil\n");
+                if (arg.type == VAL_INT) printf("%lld", arg.data.i);
+                else if (arg.type == VAL_FLOAT) printf("%g", arg.data.f);
+                else if (arg.type == VAL_BOOL) printf("%s", arg.data.i ? "true" : "false");
+                else if (arg.type == VAL_STR) printf("%s", arg.data.s);
+                else if (arg.type == VAL_OBJ) printf("[Object]");
+                else if (arg.type == VAL_ARR) printf("[Array]");
+                else if (arg.type == VAL_ERROR) printf("Error: %s", arg.data.s);
+                else printf("nil");
+                
+                if (i < node->data.call.arg_count - 1) printf(" ");
             }
+            if (is_println) printf("\n");
             fflush(stdout);
-            /* free(full_name); (arena managed) */
             return val_nil();
         }
         if (strcmp(full_name, "__builtin_args") == 0) {
@@ -849,7 +902,6 @@ static Value eval_call(AstNode* node, Environment* env) {
             struct timeval tv;
             gettimeofday(&tv, NULL);
             double res = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
-            /* free(full_name); (arena managed) */
             return val_float(res);
         }
         if (strcmp(full_name, "__builtin_delay") == 0) {
@@ -857,14 +909,61 @@ static Value eval_call(AstNode* node, Environment* env) {
             if (ms.type == VAL_INT) {
                 usleep(ms.data.i * 1000);
             }
-            /* free(full_name); (arena managed) */
             return val_nil();
         }
         if (strcmp(full_name, "__builtin_exit_proc") == 0) {
             Value code = eval(node->data.call.args[0], env);
             int c = (code.type == VAL_INT) ? code.data.i : 0;
-            /* free(full_name); (arena managed) */
             exit(c);
+        }
+        // Math built-ins
+        if (strcmp(full_name, "__builtin_math_sqrt") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i;
+            return val_float(sqrt(d));
+        }
+        if (strcmp(full_name, "__builtin_math_pow") == 0) {
+            Value b = eval(node->data.call.args[0], env);
+            Value e = eval(node->data.call.args[1], env);
+            double db = (b.type == VAL_FLOAT) ? b.data.f : (double)b.data.i;
+            double de = (e.type == VAL_FLOAT) ? e.data.f : (double)e.data.i;
+            return val_float(pow(db, de));
+        }
+        if (strcmp(full_name, "__builtin_math_sin") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i;
+            return val_float(sin(d));
+        }
+        if (strcmp(full_name, "__builtin_math_cos") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i;
+            return val_float(cos(d));
+        }
+        // File I/O built-ins
+        if (strcmp(full_name, "__builtin_file_read") == 0) {
+            Value path = eval(node->data.call.args[0], env);
+            if (path.type != VAL_STR) return val_nil();
+            char* s = read_file_internal(path.data.s);
+            if (!s) return val_nil();
+            return val_str(s);
+        }
+        if (strcmp(full_name, "__builtin_file_write") == 0) {
+            Value path = eval(node->data.call.args[0], env);
+            Value content = eval(node->data.call.args[1], env);
+            if (path.type != VAL_STR || content.type != VAL_STR) return val_bool(0);
+            FILE* f = fopen(path.data.s, "w");
+            if (!f) return val_bool(0);
+            fputs(content.data.s, f);
+            fclose(f);
+            return val_bool(1);
+        }
+        if (strcmp(full_name, "__builtin_file_delete") == 0) {
+            Value path = eval(node->data.call.args[0], env);
+            if (path.type != VAL_STR) return val_bool(0);
+            return val_bool(remove(path.data.s) == 0);
         }
         if (strcmp(full_name, "__builtin_file_exists") == 0) {
             Value path = eval(node->data.call.args[0], env);
@@ -873,7 +972,6 @@ static Value eval_call(AstNode* node, Environment* env) {
                 struct stat buffer;
                 res = (stat(path.data.s, &buffer) == 0);
             }
-            /* free(full_name); (arena managed) */
             return val_bool(res);
         }
         if (strcmp(full_name, "__builtin_str_index_of") == 0) {
@@ -898,7 +996,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                     int count = 0;
                     char *p = s.data.s;
                     while ((p = strstr(p, old.data.s))) { count++; p += oldlen; }
-                    char* result = malloc(strlen(s.data.s) + count * (strlen(new_str.data.s) - oldlen) + 1);
+                    char* result = nr_malloc(strlen(s.data.s) + count * (strlen(new_str.data.s) - oldlen) + 1);
                     char* d = result;
                     p = s.data.s;
                     while (*p) {
@@ -910,7 +1008,6 @@ static Value eval_call(AstNode* node, Environment* env) {
                     }
                     *d = 0;
                     res = val_str(result);
-                    free(result);
                 }
             }
             /* free(full_name); (arena managed) */
@@ -953,13 +1050,10 @@ static Value eval_call(AstNode* node, Environment* env) {
                 if (st < 0) st = 0;
                 if (st > slen) st = slen;
                 if (st + l > slen) l = slen - st;
-                char* sub = malloc(l + 1);
+                char* sub = nr_malloc(l + 1);
                 strncpy(sub, s.data.s + st, l);
                 sub[l] = '\0';
-                Value res = val_str(sub);
-                free(sub);
-                /* free(full_name); (arena managed) */
-                return res;
+                return val_str(sub);
             }
             /* free(full_name); (arena managed) */
             return val_nil();
@@ -969,8 +1063,9 @@ static Value eval_call(AstNode* node, Environment* env) {
             Value val = eval(node->data.call.args[1], env);
             if (arr.type == VAL_ARR) {
                 if (arr.data.arr->count >= arr.data.arr->capacity) {
+                    int old_cap = arr.data.arr->capacity;
                     arr.data.arr->capacity *= 2;
-                    arr.data.arr->elements = realloc(arr.data.arr->elements, sizeof(Value*) * arr.data.arr->capacity);
+                    arr.data.arr->elements = nr_realloc(arr.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * arr.data.arr->capacity);
                 }
                 arr.data.arr->elements[arr.data.arr->count] = nr_malloc(sizeof(Value));
 
@@ -1120,39 +1215,81 @@ static Value eval_call(AstNode* node, Environment* env) {
                 return val_nil();
             }
         }
-        if (strcmp(full_name, "toInt") == 0) {
+        if (strcmp(full_name, "toInt") == 0 || strcmp(full_name, "__builtin_conv_to_int") == 0) {
             Value v = eval(node->data.call.args[0], env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
-            int res = 0;
+            long long res = 0;
             if (v.type == VAL_INT) res = v.data.i;
-            else if (v.type == VAL_STR) res = atoi(v.data.s);
-            /* free(full_name); (arena managed) */
+            else if (v.type == VAL_FLOAT) res = (long long)v.data.f;
+            else if (v.type == VAL_STR) {
+                if (node->data.call.arg_count > 1) {
+                    Value base = eval(node->data.call.args[1], env);
+                    res = strtoll(v.data.s, NULL, (base.type == VAL_INT) ? (int)base.data.i : 10);
+                } else {
+                    res = atoll(v.data.s);
+                }
+            }
             return val_int(res);
         }
-        if (strcmp(full_name, "toString") == 0) {
+        if (strcmp(full_name, "toFloat") == 0 || strcmp(full_name, "__builtin_conv_to_float") == 0) {
             Value v = eval(node->data.call.args[0], env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
-            char buf[64];
+            double res = 0;
+            if (v.type == VAL_INT) res = (double)v.data.i;
+            else if (v.type == VAL_FLOAT) res = v.data.f;
+            else if (v.type == VAL_STR) res = atof(v.data.s);
+            return val_float(res);
+        }
+        if (strcmp(full_name, "toString") == 0 || strcmp(full_name, "__builtin_conv_to_str") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            char buf[128];
             if (v.type == VAL_INT) {
                 snprintf(buf, sizeof(buf), "%lld", v.data.i);
-                /* free(full_name); (arena managed) */
                 return val_str(nr_strdup(buf));
             } else if (v.type == VAL_FLOAT) {
                 snprintf(buf, sizeof(buf), "%g", v.data.f);
-                /* free(full_name); (arena managed) */
                 return val_str(nr_strdup(buf));
             } else if (v.type == VAL_BOOL) {
-                /* free(full_name); (arena managed) */
                 return val_str(nr_strdup(v.data.i ? "true" : "false"));
             } else if (v.type == VAL_STR) {
-                /* free(full_name); (arena managed) */
                 return v;
             } else if (v.type == VAL_NIL) {
-                /* free(full_name); (arena managed) */
                 return val_str(nr_strdup("nil"));
+            } else if (v.type == VAL_ARR) {
+                return val_str(nr_strdup("[Array]"));
             }
-            /* free(full_name); (arena managed) */
             return val_str(nr_strdup("[Object]"));
+        }
+        if (strcmp(full_name, "toBool") == 0 || strcmp(full_name, "__builtin_conv_to_bool") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            int res = 0;
+            if (v.type == VAL_BOOL) res = (int)v.data.i;
+            else if (v.type == VAL_INT) res = (v.data.i != 0);
+            else if (v.type == VAL_STR) res = (strlen(v.data.s) > 0);
+            else if (v.type != VAL_NIL) res = 1;
+            return val_bool(res);
+        }
+        if (strcmp(full_name, "__builtin_parse_int") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            if (v.type == VAL_STR) return val_int(atoll(v.data.s));
+            return val_int(0);
+        }
+        if (strcmp(full_name, "__builtin_parse_float") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            if (v.type == VAL_STR) return val_float(atof(v.data.s));
+            return val_float(0.0);
+        }
+        if (strcmp(full_name, "__builtin_parse_bool") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_RETURN) v = *v.data.return_val;
+            if (v.type == VAL_STR) {
+                if (strcmp(v.data.s, "true") == 0 || strcmp(v.data.s, "1") == 0) return val_bool(1);
+            }
+            return val_bool(0);
         }
         if (strcmp(full_name, "__builtin_obj_keys") == 0) {
             Value v = eval(node->data.call.args[0], env);
@@ -1182,19 +1319,16 @@ static Value eval_call(AstNode* node, Environment* env) {
             /* free(full_name); (arena managed) */
             return val_int(res);
         }
-        if (strcmp(full_name, "__builtin_json_encode") == 0 || strcmp(full_name, "json_encode") == 0) {
+        if (strcmp(full_name, "__builtin_json_encode") == 0 || strcmp(full_name, "json_encode") == 0 || strcmp(full_name, "__builtin_json_stringify") == 0) {
             Value v = eval(node->data.call.args[0], env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
             char* s = val_to_json_internal(v);
-            Value res = val_str(s);
-            free(s);
-            /* free(full_name); (arena managed) */
-            return res;
+            return val_str(s);
         }
-        if (strcmp(full_name, "__builtin_json_decode") == 0 || strcmp(full_name, "json_decode") == 0) {
+        if (strcmp(full_name, "__builtin_json_decode") == 0 || strcmp(full_name, "json_decode") == 0 || strcmp(full_name, "__builtin_json_parse") == 0) {
             Value v = eval(node->data.call.args[0], env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
-            if (v.type != VAL_STR) { /* free(full_name); (arena managed) */ return val_nil(); }
+            if (v.type != VAL_STR) return val_nil();
             
             char* p = v.data.s; 
             while(*p == ' ' || *p == '[' || *p == ']') p++;
@@ -1212,11 +1346,50 @@ static Value eval_call(AstNode* node, Environment* env) {
                         eval_set_field(obj.data.obj, key, val_int(atoi(val))); 
                     }
                 }
-                /* free(full_name); (arena managed) */
                 return obj;
             }
-            /* free(full_name); (arena managed) */
             return val_nil();
+        }
+        if (strcmp(full_name, "__builtin_encoding_to_base64") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_STR) {
+                extern char* base64_encode(const unsigned char* data, size_t input_length);
+                return val_str(base64_encode((const unsigned char*)v.data.s, strlen(v.data.s)));
+            }
+            return val_nil();
+        }
+        if (strcmp(full_name, "__builtin_encoding_from_base64") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_STR) {
+                extern unsigned char* base64_decode(const char* data, size_t input_length, size_t* output_length);
+                size_t out_len;
+                unsigned char* decoded = base64_decode(v.data.s, strlen(v.data.s), &out_len);
+                if (decoded) return val_str((char*)decoded);
+            }
+            return val_nil();
+        }
+        if (strcmp(full_name, "__builtin_encoding_to_hex") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_INT) {
+                char buf[32]; snprintf(buf, sizeof(buf), "0x%llx", v.data.i);
+                return val_str(nr_strdup(buf));
+            } else if (v.type == VAL_STR) {
+                char* res = nr_malloc(strlen(v.data.s) * 2 + 1);
+                for (size_t i = 0; i < strlen(v.data.s); i++) sprintf(res + i*2, "%02x", (unsigned char)v.data.s[i]);
+                return val_str(res);
+            }
+            return val_nil();
+        }
+        if (strcmp(full_name, "__builtin_time_to_unix") == 0) {
+            Value v = eval(node->data.call.args[0], env);
+            if (v.type == VAL_OBJ) {
+                struct tm t = {0};
+                t.tm_year = (int)get_dot_value(v, "year").data.i - 1900;
+                t.tm_mon = (int)get_dot_value(v, "month").data.i - 1;
+                t.tm_mday = (int)get_dot_value(v, "day").data.i;
+                return val_int((long long)mktime(&t));
+            }
+            return val_int((long long)time(NULL));
         }
     }
     
@@ -1375,7 +1548,6 @@ Value eval(AstNode* node, Environment* env) {
             } else {
                 env_assign(env, target, v);
             }
-            free(target);
             return v;
         }
         case AST_VAR_REF: do_var_ref: {
@@ -1657,8 +1829,18 @@ Value eval(AstNode* node, Environment* env) {
                 if (idx.type != VAL_INT) report_runtime_error(node, env, "TYPE", "Array index must be integer");
                 if (idx.data.i < 0 || idx.data.i >= obj.data.arr->count) report_runtime_error(node, env, "BOUNDS", "Array index out of bounds");
                 return *obj.data.arr->elements[idx.data.i];
-            } else if (obj.type == VAL_OBJ && idx.type == VAL_STR) {
-                return get_dot_value(obj, idx.data.s);
+            } else if (obj.type == VAL_OBJ) {
+                char* key_str;
+                if (idx.type == VAL_STR) key_str = idx.data.s;
+                else {
+                    char buf[64];
+                    if (idx.type == VAL_INT) snprintf(buf, sizeof(buf), "%lld", idx.data.i);
+                    else if (idx.type == VAL_FLOAT) snprintf(buf, sizeof(buf), "%g", idx.data.f);
+                    else if (idx.type == VAL_BOOL) snprintf(buf, sizeof(buf), "%s", idx.data.i ? "true" : "false");
+                    else snprintf(buf, sizeof(buf), "nil");
+                    key_str = nr_strdup(buf);
+                }
+                return get_dot_value(obj, key_str);
             }
             return val_nil();
         }
@@ -1692,8 +1874,18 @@ Value eval(AstNode* node, Environment* env) {
                 if (idx.type != VAL_INT) report_runtime_error(node, env, "TYPE", "Array index must be integer");
                 if (idx.data.i < 0 || idx.data.i >= obj.data.arr->count) report_runtime_error(node, env, "BOUNDS", "Array index out of bounds");
                 *obj.data.arr->elements[idx.data.i] = val;
-            } else if (obj.type == VAL_OBJ && idx.type == VAL_STR) {
-                eval_set_field(obj.data.obj, idx.data.s, val);
+            } else if (obj.type == VAL_OBJ) {
+                char* key_str;
+                if (idx.type == VAL_STR) key_str = idx.data.s;
+                else {
+                    char buf[64];
+                    if (idx.type == VAL_INT) snprintf(buf, sizeof(buf), "%lld", idx.data.i);
+                    else if (idx.type == VAL_FLOAT) snprintf(buf, sizeof(buf), "%g", idx.data.f);
+                    else if (idx.type == VAL_BOOL) snprintf(buf, sizeof(buf), "%s", idx.data.i ? "true" : "false");
+                    else snprintf(buf, sizeof(buf), "nil");
+                    key_str = nr_strdup(buf);
+                }
+                eval_set_field(obj.data.obj, key_str, val);
             }
             return val;
         }
@@ -1701,49 +1893,59 @@ Value eval(AstNode* node, Environment* env) {
             char* clean_path = node->data.import_stmt.path;
             char full_path[512];
             char* source = NULL;
+            int is_lib = node->data.import_stmt.is_library;
 
-            // Try include paths
-            for (int i=0; i<include_path_count; i++) {
-                snprintf(full_path, sizeof(full_path), "%s/%s.nr", include_paths[i], clean_path);
-                source = read_file_internal(full_path);
-                if (source) break;
-            }
-
-            if (!source) {
-                snprintf(full_path, sizeof(full_path), "%s.nr", clean_path);
-                source = read_file_internal(full_path);
-            }
-            if (!source) {
+            if (is_lib) {
+                // 1. Try standard library
                 snprintf(full_path, sizeof(full_path), "%s/%s.nr", nira_std_lib_path, clean_path);
                 source = read_file_internal(full_path);
+                
+                // 2. Try local .nira/libs
+                if (!source) {
+                    snprintf(full_path, sizeof(full_path), ".nira/libs/%s/%s.nr", clean_path, clean_path);
+                    source = read_file_internal(full_path);
+                }
+                if (!source) {
+                    snprintf(full_path, sizeof(full_path), ".nira/libs/%s.nr", clean_path);
+                    source = read_file_internal(full_path);
+                }
+                
+                // 3. Try global libs
+                if (!source) {
+                    snprintf(full_path, sizeof(full_path), "%s/%s/%s.nr", nira_global_libs_path, clean_path, clean_path);
+                    source = read_file_internal(full_path);
+                }
+                if (!source) {
+                    snprintf(full_path, sizeof(full_path), "%s/%s.nr", nira_global_libs_path, clean_path);
+                    source = read_file_internal(full_path);
+                }
+            } else {
+                // 1. Try include paths (workspace)
+                for (int i=0; i<include_path_count; i++) {
+                    snprintf(full_path, sizeof(full_path), "%s/%s.nr", include_paths[i], clean_path);
+                    source = read_file_internal(full_path);
+                    if (source) break;
+                }
+                
+                // 2. Try current directory
+                if (!source) {
+                    snprintf(full_path, sizeof(full_path), "%s.nr", clean_path);
+                    source = read_file_internal(full_path);
+                }
             }
-            if (!source) {
-                snprintf(full_path, sizeof(full_path), ".nira/libs/%s/%s.nr", clean_path, clean_path);
-                source = read_file_internal(full_path);
-            }
-            if (!source) {
-                snprintf(full_path, sizeof(full_path), ".nira/libs/%s.nr", clean_path);
-                source = read_file_internal(full_path);
-            }
-            // Try global libs (nira install -g)
-            if (!source) {
-                snprintf(full_path, sizeof(full_path), "%s/%s/%s.nr", nira_global_libs_path, clean_path, clean_path);
-                source = read_file_internal(full_path);
-            }
-            if (!source) {
-                snprintf(full_path, sizeof(full_path), "%s/%s.nr", nira_global_libs_path, clean_path);
-                source = read_file_internal(full_path);
-            }
+
             if (!source) {
                 char buf[512];
-                snprintf(buf, sizeof(buf), "Could not find module '%s'", clean_path);
+                snprintf(buf, sizeof(buf), "Could not find module '%s' (is_library=%d)", clean_path, is_lib);
                 report_runtime_error(node, env, "IMPORT", buf);
+                return val_nil();
             }
             Lexer lex;
             lexer_init(&lex, source);
             Parser p;
             parser_init(&p, &lex, full_path);
             AstNode* imported_program = parse_program(&p);
+            nr_resolve(imported_program);
             Environment* root = env;
             while (root->parent) root = root->parent;
             Environment* import_env = env_new(root, 0);

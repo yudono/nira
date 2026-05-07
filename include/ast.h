@@ -154,6 +154,7 @@ typedef struct AstNode {
             char* alias; // For 'import http as net'
             char** symbols;
             int symbol_count;
+            int is_library; // [NEW] 1 if imported as 'import module', 0 if as 'import "path"'
             struct AstNode* module_prog; // Store the imported module's program
         } import_stmt;
 

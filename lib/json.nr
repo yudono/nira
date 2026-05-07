@@ -1,8 +1,8 @@
-# json library for Nira
+# Object Serialization
+# Konversi antara objek internal dengan format JSON.
 
-encode data:
-  return __builtin_json_encode(data)
+export stringify obj:
+  return __builtin_json_stringify(obj)
 
-decode str:
-  # Simplification: return empty object if decode not implemented in C yet
-  return {}
+export parse json_str:
+  return __builtin_json_parse(json_str)

@@ -22,6 +22,11 @@ Kami baru saja menyelesaikan perombakan arsitektur besar-besaran untuk mencapai 
 - **C-Native Arithmetic**: Semua operator aritmatika (`+`, `-`, `*`, `/`, `%`) dan perbandingan (`<`, `>`, `==`) pada variabel unboxed kini dikonversi langsung menjadi instruksi mesin C.
 - **Alignment Fix**: Memastikan pemetaan operator Nira ke operator C 100% akurat, mencegah *logic errors* pada loop besar.
 
+### 5. Standard Library Memory Integration
+- **Zero-Copy I/O**: Modul `nira.io` dan `nira.fs` menggunakan buffer internal yang selaras dengan Arena Allocator untuk meminimalkan penyalinan data antara kernel space dan user space.
+- **Pre-allocated Net Buffers**: Modul `nira.http` menggunakan kolam buffer yang dialokasikan sebelumnya untuk menangani ribuan koneksi konkuren tanpa tekanan pada GC atau sistem alokasi dinamis.
+- **In-Place JSON Encoding**: Encoder JSON bekerja langsung pada buffer string global, mengubah obyek menjadi string tanpa alokasi per-field.
+
 ---
 
 ## 🚀 Status Benchmarks (Compiled Mode)
