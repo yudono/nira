@@ -65,10 +65,37 @@ static char* copy_token_text(Token t) {
 
 static char* strip_quotes(Token t) {
     if (t.length < 2) return nr_strdup("");
-    char* s = nr_malloc(t.length - 1);
-    memcpy(s, t.text + 1, t.length - 2);
-    s[t.length - 2] = '\0';
-    return s;
+    const char* src;
+    int src_len;
+    // Check for triple-quote string
+    if (t.length >= 6 && t.text[0] == '"' && t.text[1] == '"' && t.text[2] == '"') {
+        src = t.text + 3;
+        src_len = t.length - 6;
+    } else {
+        src = t.text + 1;
+        src_len = t.length - 2;
+    }
+    // Allocate enough space (escapes make it shorter or same)
+    char* result = nr_malloc(src_len + 1);
+    int j = 0;
+    for (int i = 0; i < src_len; i++) {
+        if (src[i] == '\\' && i + 1 < src_len) {
+            i++;
+            switch (src[i]) {
+                case 'n': result[j++] = '\n'; break;
+                case 't': result[j++] = '\t'; break;
+                case 'r': result[j++] = '\r'; break;
+                case '\\': result[j++] = '\\'; break;
+                case '"': result[j++] = '"'; break;
+                case '0': result[j++] = '\0'; break;
+                default: result[j++] = '\\'; result[j++] = src[i]; break;
+            }
+        } else {
+            result[j++] = src[i];
+        }
+    }
+    result[j] = '\0';
+    return result;
 }
 
 void parser_init(Parser* p, Lexer* l) {
@@ -390,11 +417,26 @@ static AstNode* parse_unary(Parser* p) {
     return parse_primary(p);
 }
 
-static AstNode* parse_multiplication(Parser* p) {
+static AstNode* parse_power(Parser* p) {
     AstNode* expr = parse_unary(p);
-    while (match(p, TOKEN_OP_MUL) || match(p, TOKEN_OP_DIV)) {
+    // Right-associative: use recursion instead of while loop
+    if (match(p, TOKEN_OP_POW)) {
         char* op = copy_token_text(p->previous);
-        AstNode* right = parse_unary(p);
+        AstNode* right = parse_power(p); // recurse for right-associativity
+        AstNode* binary = ast_new(AST_BINARY, p->current);
+        binary->data.binary.left = expr;
+        binary->data.binary.op = op;
+        binary->data.binary.right = right;
+        expr = binary;
+    }
+    return expr;
+}
+
+static AstNode* parse_multiplication(Parser* p) {
+    AstNode* expr = parse_power(p);
+    while (match(p, TOKEN_OP_MUL) || match(p, TOKEN_OP_DIV) || match(p, TOKEN_OP_MOD)) {
+        char* op = copy_token_text(p->previous);
+        AstNode* right = parse_power(p);
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
         binary->data.binary.op = op;

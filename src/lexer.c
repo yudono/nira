@@ -169,7 +169,31 @@ Token lexer_next_token(Lexer* l) {
     // Strings
     if (c == '"') {
         int start = l->cursor - 1;
-        while (peek(l) != '"' && !is_at_end(l)) advance(l);
+        // Check for triple-quote multi-line string
+        if (peek(l) == '"' && peek_n(l, 1) == '"') {
+            advance(l); // consume second "
+            advance(l); // consume third "
+            // Scan until closing """
+            while (!is_at_end(l)) {
+                if (peek(l) == '"' && peek_n(l, 1) == '"' && peek_n(l, 2) == '"') {
+                    advance(l); // consume first "
+                    advance(l); // consume second "
+                    advance(l); // consume third "
+                    break;
+                }
+                advance(l);
+            }
+            return make_token(l, TOKEN_STRING, l->cursor - start);
+        }
+        // Single-quote string with escape handling
+        while (peek(l) != '"' && !is_at_end(l)) {
+            if (peek(l) == '\\') {
+                advance(l); // consume backslash
+                if (!is_at_end(l)) advance(l); // consume escaped char
+            } else {
+                advance(l);
+            }
+        }
         if (is_at_end(l)) {
             fprintf(stderr, "Unterminated string at line %d\n", l->line);
         } else {
@@ -208,8 +232,14 @@ Token lexer_next_token(Lexer* l) {
             }
             return make_token(l, TOKEN_OP_MINUS, 1);
         case '+': return make_token(l, TOKEN_OP_PLUS, 1);
-        case '*': return make_token(l, TOKEN_OP_MUL, 1);
+        case '*':
+            if (peek(l) == '*') {
+                advance(l);
+                return make_token(l, TOKEN_OP_POW, 2);
+            }
+            return make_token(l, TOKEN_OP_MUL, 1);
         case '/': return make_token(l, TOKEN_OP_DIV, 1);
+        case '%': return make_token(l, TOKEN_OP_MOD, 1);
         case '<':
             if (peek(l) == '=') {
                 advance(l);
@@ -284,6 +314,8 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_OP_GE: return "GE";
         case TOKEN_OP_LT: return "LT";
         case TOKEN_OP_GT: return "GT";
+        case TOKEN_OP_MOD: return "MOD";
+        case TOKEN_OP_POW: return "POW";
         case TOKEN_KEYWORD_NATIVE: return "NATIVE";
         default: return "UNKNOWN";
     }

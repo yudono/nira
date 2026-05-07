@@ -17,6 +17,7 @@ import "stress_datastructures"
 import "stress_edge_cases"
 import "stress_io"
 import "stress_closures"
+import "stress_strings"
 
 main:
   print("╔══════════════════════════════════════╗")
@@ -50,6 +51,11 @@ main:
   print("")
 
   stress_closures.main()
+  print("")
+  print("────────────────────────────────────────")
+  print("")
+
+  stress_strings.main()
   print("")
   print("╔══════════════════════════════════════╗")
   print("║   ALL STRESS TESTS COMPLETED ✅      ║")

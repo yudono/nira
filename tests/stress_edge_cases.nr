@@ -88,8 +88,12 @@ export main:
   print("100 x's length: " + len(s))
 
   # String with special content
-  special = "hello world"
-  print("special string: " + special)
+  special = "hello\nworld"
+  print("escaped newline:")
+  print(special)
+
+  tab_str = "col1\tcol2"
+  print("escaped tab: " + tab_str)
 
   # --- Unicode strings ---
   print("")
@@ -128,12 +132,22 @@ export main:
   print("str eq: " + ("abc" == "abc"))
   print("str neq: " + ("abc" != "xyz"))
 
-  # --- Integer division ---
+  # --- Modulo operations ---
   print("")
-  print("Integer Division Tests:")
-  print("10 / 3 = " + (10 / 3))
-  print("7 / 2 = " + (7 / 2))
-  print("100 / 10 = " + (100 / 10))
+  print("Modulo Tests:")
+  print("10 %% 3 = " + (10 % 3))
+  print("7 %% 2 = " + (7 % 2))
+  print("100 %% 10 = " + (100 % 10))
+  print("17 %% 5 = " + (17 % 5))
+
+  # --- Power operations ---
+  print("")
+  print("Power Tests:")
+  print("2 ** 10 = " + (2 ** 10))
+  print("3 ** 4 = " + (3 ** 4))
+  print("5 ** 3 = " + (5 ** 3))
+  print("10 ** 0 = " + (10 ** 0))
+  print("2 ** 16 = " + (2 ** 16))
 
   # --- Chained operations ---
   print("")

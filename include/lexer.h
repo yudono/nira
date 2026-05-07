@@ -51,6 +51,8 @@ typedef enum {
     TOKEN_OP_GE,      // >=
     TOKEN_OP_LT,      // <
     TOKEN_OP_GT,      // >
+    TOKEN_OP_MOD,     // %
+    TOKEN_OP_POW,     // **
     TOKEN_KEYWORD_FN,
     TOKEN_KEYWORD_PRINT,
     TOKEN_KEYWORD_NATIVE,

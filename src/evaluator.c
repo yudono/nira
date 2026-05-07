@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <time.h>
+#include <math.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -343,6 +344,14 @@ static Value eval_binary(AstNode* node, Environment* env) {
         if (strcmp(op, "/") == 0) {
             if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero");
             return is_f ? val_float(l / r) : val_int((int)(l / r));
+        }
+        if (strcmp(op, "%") == 0) {
+            if (r == 0) report_runtime_error(node, env, "MATH", "Modulo by zero");
+            return is_f ? val_float(fmod(l, r)) : val_int(left.data.i % right.data.i);
+        }
+        if (strcmp(op, "**") == 0) {
+            double result = pow(l, r);
+            return is_f ? val_float(result) : val_int((int)result);
         }
         if (strcmp(op, ">") == 0) return val_bool(l > r);
         if (strcmp(op, "<") == 0) return val_bool(l < r);

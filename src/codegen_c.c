@@ -76,7 +76,7 @@ static void print_runtime(FILE *out) {
           "#include <stdio.h>\n#include <stdlib.h>\n#include "
           "<string.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include "
           "<unistd.h>\n#include <sys/stat.h>\n#include <time.h>\n#include "
-          "<regex.h>\n#include <ctype.h>\n");
+          "<regex.h>\n#include <ctype.h>\n#include <math.h>\n");
   for (int i = 0; i < extra_header_count; i++)
     fprintf(out, "#include %s\n", extra_headers[i]);
   fprintf(out,
@@ -1021,9 +1021,22 @@ void codegen_c_node(AstNode *node, FILE *out) {
   case AST_LITERAL_FLOAT:
     fprintf(out, "val_float(%g)", node->data.float_val);
     break;
-  case AST_LITERAL_STR:
-    fprintf(out, "val_str(\"%s\")", node->data.str_val);
+  case AST_LITERAL_STR: {
+    // Escape the string for C output
+    fprintf(out, "val_str(\"");
+    for (const char* p = node->data.str_val; *p; p++) {
+        switch (*p) {
+            case '\n': fprintf(out, "\\n"); break;
+            case '\t': fprintf(out, "\\t"); break;
+            case '\r': fprintf(out, "\\r"); break;
+            case '\\': fprintf(out, "\\\\"); break;
+            case '"': fprintf(out, "\\\""); break;
+            default: fputc(*p, out); break;
+        }
+    }
+    fprintf(out, "\")");
     break;
+  }
   case AST_LITERAL_BOOL:
     fprintf(out, "val_bool(%d)", node->data.int_val);
     break;
@@ -1421,6 +1434,18 @@ void codegen_c_node(AstNode *node, FILE *out) {
       fprintf(out, "val_bool(!is_truthy(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, "))");
+    } else if (strcmp(node->data.binary.op, "%") == 0) {
+      fprintf(out, "val_int(");
+      codegen_c_node(node->data.binary.left, out);
+      fprintf(out, ".data.i %% ");
+      codegen_c_node(node->data.binary.right, out);
+      fprintf(out, ".data.i)");
+    } else if (strcmp(node->data.binary.op, "**") == 0) {
+      fprintf(out, "val_int((int)pow((double)");
+      codegen_c_node(node->data.binary.left, out);
+      fprintf(out, ".data.i, (double)");
+      codegen_c_node(node->data.binary.right, out);
+      fprintf(out, ".data.i))");
     } else {
       fprintf(out, "val_int(");
       codegen_c_node(node->data.binary.left, out);
