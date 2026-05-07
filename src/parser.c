@@ -275,22 +275,34 @@ static AstNode* parse_primary(Parser* p) {
         AstNode* node = ast_new(AST_VAR_REF, p->current);
         node->data.var_name = copy_token_text(p->previous);
         
-        while (match(p, TOKEN_DOT)) {
-            consume(p, TOKEN_IDENT, "Expect identifier after '.'");
-            int old_len = strlen(node->data.var_name);
-            int add_len = p->previous.length + 1;
-            node->data.var_name = realloc(node->data.var_name, old_len + add_len + 1);
-            strcat(node->data.var_name, ".");
-            strncat(node->data.var_name, p->previous.text, p->previous.length);
-        }
-
-        while (match(p, TOKEN_LBRACKET)) {
-            AstNode* index_expr = parse_expression(p);
-            consume(p, TOKEN_RBRACKET, "Expect ']' after index");
-            AstNode* index_node = ast_new(AST_INDEX, p->current);
-            index_node->data.index.object = node;
-            index_node->data.index.index = index_expr;
-            node = index_node;
+        while (1) {
+            if (match(p, TOKEN_DOT)) {
+                consume(p, TOKEN_IDENT, "Expect identifier after '.'");
+                if (node->type == AST_VAR_REF) {
+                    int old_len = strlen(node->data.var_name);
+                    int add_len = p->previous.length + 1;
+                    node->data.var_name = realloc(node->data.var_name, old_len + add_len + 1);
+                    strcat(node->data.var_name, ".");
+                    strncat(node->data.var_name, p->previous.text, p->previous.length);
+                } else {
+                    // It's an AST_INDEX followed by a DOT. We can treat it as another AST_INDEX where index is a string literal!
+                    AstNode* index_node = ast_new(AST_INDEX, p->current);
+                    index_node->data.index.object = node;
+                    AstNode* str_node = ast_new(AST_LITERAL_STR, p->current);
+                    str_node->data.str_val = copy_token_text(p->previous);
+                    index_node->data.index.index = str_node;
+                    node = index_node;
+                }
+            } else if (match(p, TOKEN_LBRACKET)) {
+                AstNode* index_expr = parse_expression(p);
+                consume(p, TOKEN_RBRACKET, "Expect ']' after index");
+                AstNode* index_node = ast_new(AST_INDEX, p->current);
+                index_node->data.index.object = node;
+                index_node->data.index.index = index_expr;
+                node = index_node;
+            } else {
+                break;
+            }
         }
 
         if (match(p, TOKEN_ARROW)) {
@@ -306,7 +318,11 @@ static AstNode* parse_primary(Parser* p) {
 
         if (match(p, TOKEN_LPAREN)) {
             AstNode* call = ast_new(AST_CALL, p->current);
-            call->data.call.name = node->data.var_name;
+            if (node->type == AST_VAR_REF) {
+                call->data.call.name = node->data.var_name;
+            } else {
+                call->data.call.name = strdup("anonymous"); // Or handle function pointers later
+            }
             int capacity = 8;
             int count = 0;
             AstNode** args = nr_malloc(sizeof(AstNode*) * capacity);
@@ -316,7 +332,12 @@ static AstNode* parse_primary(Parser* p) {
                     capacity *= 2;
                     args = nr_realloc(args, sizeof(AstNode*) * old_cap, sizeof(AstNode*) * capacity);
                 }
-                args[count++] = parse_expression(p);
+                AstNode* arg_expr = parse_expression(p);
+                if (!arg_expr) {
+                    advance(p); // PREVENT INFINITE LOOP
+                } else {
+                    args[count++] = arg_expr;
+                }
                 if (match(p, TOKEN_COMMA)) {}
             }
             consume(p, TOKEN_RPAREN, "Expect ')' after arguments");

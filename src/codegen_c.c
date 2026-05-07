@@ -1172,6 +1172,11 @@ void codegen_c_node(AstNode *node, FILE *out) {
       if (node->data.call.arg_count > 0)
         codegen_c_node(node->data.call.args[0], out);
       fprintf(out, ")");
+    } else if (strcmp(n, "toString") == 0) {
+      fprintf(out, "nr_rt_to_string(");
+      if (node->data.call.arg_count > 0)
+        codegen_c_node(node->data.call.args[0], out);
+      fprintf(out, ")");
     } else if (strcmp(n, "__builtin_args") == 0) {
       fprintf(out, "nr_rt_args()");
     } else if (strcmp(n, "__builtin_http_serve") == 0) {

@@ -30,7 +30,7 @@ native:
             Value v = val_nil();
             if (type == SQLITE_INTEGER) v = val_int(sqlite3_column_int(stmt, i));
             else if (type == SQLITE_NULL) v = val_nil();
-            else v = val_str((char*)sqlite3_column_text(stmt, i));
+            else v = val_str(nr_strdup((char*)sqlite3_column_text(stmt, i)));
             set_field(o, name, v);
           }
           nr_rt_push(a, o);

@@ -185,77 +185,19 @@ int main(int argc, char *argv[]) {
   }
 
   if (is_run) {
-    Environment *env = env_new(NULL);
-    env->source = source;
-    env->filename = filename;
-    while (1) {
-      struct stat st;
-      stat(filename, &st);
-      long last_mod = st.st_mtime;
-
-      g_child_pid = fork();
-      if (g_child_pid == 0) {
-        // Child: run the code
-        Environment *child_env = env_new(NULL);
-        child_env->source = source;
-        child_env->filename = filename;
-        nr_eval_add_include_path(".");
-        nr_eval_add_include_path("lib");
-        eval(program, child_env);
-        Value main_func = env_get(child_env, "main");
-        if (main_func.type == VAL_FUNC) {
-          AstNode *call_node = ast_new(AST_CALL, (Token){0});
-          call_node->data.call.name = "main";
-          call_node->data.call.args = NULL;
-          call_node->data.call.arg_count = 0;
-          eval(call_node, child_env);
-        }
-        exit(0);
-      } else {
-        // Parent: watch file
-        printf("🚀 Running %s (Live Reload enabled)\n", filename);
-        while (1) {
-          sleep(1);
-          struct stat st2;
-          stat(filename, &st2);
-          if (st2.st_mtime > last_mod) {
-            printf("\n🔄 File changed, restarting...\n");
-            kill(g_child_pid, SIGKILL);
-            int status;
-            waitpid(g_child_pid, &status, 0);
-            break; // Restart the outer loop
-          }
-          int status;
-          pid_t result = waitpid(g_child_pid, &status, WNOHANG);
-          if (result != 0) {
-            // Child finished or crashed
-            if (WIFEXITED(status)) {
-              if (WEXITSTATUS(status) != 0)
-                printf("❌ Server exited with error code %d. Waiting for "
-                       "changes...\n",
-                       WEXITSTATUS(status));
-            } else if (WIFSIGNALED(status)) {
-              printf("❌ Server crashed (signal %d). Waiting for changes...\n",
-                     WTERMSIG(status));
-            }
-
-            // Keep watching file
-            while (1) {
-              sleep(1);
-              struct stat st2;
-              stat(filename, &st2);
-              if (st2.st_mtime > last_mod)
-                break; // Re-read and restart
-            }
-            break;
-          }
-        }
-        // Re-read and re-parse before restarting
-        source = read_file(filename);
-        lexer_init(&lexer, source);
-        parser_init(&parser, &lexer);
-        program = parse_program(&parser);
-      }
+    Environment *child_env = env_new(NULL);
+    child_env->source = source;
+    child_env->filename = filename;
+    nr_eval_add_include_path(".");
+    nr_eval_add_include_path("lib");
+    eval(program, child_env);
+    Value main_func = env_get(child_env, "main");
+    if (main_func.type == VAL_FUNC) {
+      AstNode *call_node = ast_new(AST_CALL, (Token){0});
+      call_node->data.call.name = "main";
+      call_node->data.call.args = NULL;
+      call_node->data.call.arg_count = 0;
+      eval(call_node, child_env);
     }
   } else if (is_build) {
     // Sanitize filename to prevent command injection
