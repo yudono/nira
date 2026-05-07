@@ -31,8 +31,5 @@
         "path": "./syntaxes/nira.tmLanguage.json"
       }
     ]
-  },
-  "activationEvents": [
-    "onLanguage:nira"
-  ]
+  }
 }

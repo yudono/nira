@@ -138,10 +138,10 @@ static void print_runtime(FILE* out) {
     fprintf(out, "  int opt = 1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));\n");
     fprintf(out, "  address.sin_family = AF_INET; address.sin_addr.s_addr = INADDR_ANY; address.sin_port = htons(port.data.i);\n");
     fprintf(out, "  bind(server_fd, (struct sockaddr *)&address, sizeof(address)); listen(server_fd, 3);\n");
+    fprintf(out, "  printf(\"HTTP Server listening on port %%d...\\n\", port.data.i);\n");
     fprintf(out, "  while(1) { new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);\n");
     fprintf(out, "    char buffer[30000] = {0}; int n = recv(new_socket, buffer, 30000, 0);\n");
     fprintf(out, "    if (n <= 0) { close(new_socket); continue; }\n");
-    fprintf(out, "");
     fprintf(out, "    char method[16], path[256]; sscanf(buffer, \"%%s %%s\", method, path);\n");
     fprintf(out, "    Value req = val_obj(); set_field(req, \"method\", val_str(method)); set_field(req, \"path\", val_str(path));\n");
     fprintf(out, "    char* body_ptr = strstr(buffer, \"\\r\\n\\r\\n\"); if (body_ptr) { body_ptr += 4; set_field(req, \"body\", val_str(body_ptr)); } else { set_field(req, \"body\", val_nil()); }\n");

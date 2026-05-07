@@ -566,7 +566,7 @@ static AstNode* parse_statement(Parser* p) {
         // Skip possible parameters
         while (isalpha(s[i]) || s[i] == '_') {
             while (isalnum(s[i]) || s[i] == '_') i++;
-            while (s[i] == ' ' || s[i] == '\t') i++;
+            while (s[i] == ' ' || s[i] == '\t' || s[i] == ',') i++;
         }
         
         if (s[i] == '(') {
@@ -615,6 +615,7 @@ static AstNode* parse_statement(Parser* p) {
                 while (check(p, TOKEN_IDENT)) {
                     advance(p);
                     params[count++] = copy_token_text(p->previous);
+                    if (match(p, TOKEN_COMMA)) {}
                 }
             }
             
