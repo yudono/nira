@@ -1,7 +1,7 @@
-console.time("JS String Concat");
+let start = Date.now();
 let s = "";
-for (let i = 0; i < 10000; i++) {
+for (let i = 0; i < 100000; i++) {
     s += "a";
 }
-console.timeEnd("JS String Concat");
-console.log(`JavaScript: Length: ${s.length}`);
+let end = Date.now();
+console.log(`JavaScript: ${end - start} ms (Length: ${s.length})`);

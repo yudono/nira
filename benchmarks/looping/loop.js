@@ -1,7 +1,7 @@
-console.time("JS Loop");
-let total = 0;
-for (let i = 0; i < 10000000; i++) {
-    total += i;
+let start = Date.now();
+let sum = 0;
+for (let i = 0; i < 100000000; i++) {
+    sum += i;
 }
-console.timeEnd("JS Loop");
-console.log(`JavaScript: Result: ${total}`);
+let end = Date.now();
+console.log(`JavaScript: ${end - start} ms (Result: ${sum})`);

@@ -10,7 +10,9 @@ typedef struct ArenaBlock {
 } ArenaBlock;
 
 typedef struct {
-    ArenaBlock* blocks;
+    char* heap_start;
+    char* heap_end;
+    char* current;
 } Arena;
 
 Arena* arena_new();

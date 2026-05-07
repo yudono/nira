@@ -336,7 +336,7 @@ static AstNode* parse_primary(Parser* p) {
                 if (node->type == AST_VAR_REF) {
                     int old_len = strlen(node->data.var_ref.name);
                     int add_len = p->previous.length + 1;
-                    node->data.var_ref.name = realloc(node->data.var_ref.name, old_len + add_len + 1);
+                    node->data.var_ref.name = nr_realloc(node->data.var_ref.name, old_len + 1, old_len + add_len + 1);
                     strcat(node->data.var_ref.name, ".");
                     strncat(node->data.var_ref.name, p->previous.text, p->previous.length);
                     node->data.var_ref.hash = hash_key(node->data.var_ref.name);

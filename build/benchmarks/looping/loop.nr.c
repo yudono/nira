@@ -24,12 +24,11 @@
 
 int nr_argc; char** nr_argv;
 typedef enum { VAL_NIL, VAL_INT, VAL_FLOAT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_ERROR } ValueType;
-typedef struct ArenaBlock { void* ptr; struct ArenaBlock* next; } ArenaBlock;
-typedef struct { ArenaBlock* blocks; } Arena; Arena* nr_arena;
-void* nr_alloc(size_t sz) { void* p = malloc(sz); ArenaBlock* b = malloc(sizeof(ArenaBlock)); b->ptr = p; b->next = nr_arena->blocks; nr_arena->blocks = b; return p; }
-void* nr_checkpoint() { return nr_arena->blocks; }
-void nr_rollback(void* cp) { ArenaBlock* curr = nr_arena->blocks; while(curr && curr != cp) { ArenaBlock* next = curr->next; free(curr->ptr); free(curr); curr = next; } nr_arena->blocks = cp; }
-void nr_arena_clear() { nr_rollback(NULL); }
+typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;
+void* nr_alloc(size_t sz) { sz = (sz + 7) & ~7; if (nr_arena->current + sz > nr_arena->heap_end) exit(1); void* p = nr_arena->current; nr_arena->current += sz; return p; }
+void* nr_checkpoint() { return nr_arena->current; }
+void nr_rollback(void* cp) { if(cp) nr_arena->current = cp; }
+void nr_arena_clear() { nr_arena->current = nr_arena->heap_start; }
 char* nr_strdup(const char* s) { char* d = nr_alloc(strlen(s)+1); strcpy(d, s); return d; }
 struct Value; typedef struct Value { ValueType type; union { long long i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;
 
@@ -37,7 +36,7 @@ static inline Value val_nil() { return (Value){.type = VAL_NIL}; }
 static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }
 static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
 static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }
-Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = nr_strdup(s)}; }
+static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = (char*)s}; }
 Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }
 Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = ptr}; }
 bool is_truthy(Value v) { if (v.type == VAL_NIL) return false; if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if (v.type == VAL_FLOAT) return v.data.f != 0.0; return true; }
@@ -62,7 +61,22 @@ static inline Value nr_rt_add(Value l, Value r) {
     char buf_l[64], buf_r[64]; char *sl, *sr;
     if (l.type == VAL_STR) sl = l.data.s; else if (l.type == VAL_INT) { snprintf(buf_l, 64, "%lld", l.data.i); sl = buf_l; } else if (l.type == VAL_FLOAT) { snprintf(buf_l, 64, "%g", l.data.f); sl = buf_l; } else sl = "nil";
     if (r.type == VAL_STR) sr = r.data.s; else if (r.type == VAL_INT) { snprintf(buf_r, 64, "%lld", r.data.i); sr = buf_r; } else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, "%g", r.data.f); sr = buf_r; } else sr = "nil";
-    char* res = nr_alloc(strlen(sl) + strlen(sr) + 1); strcpy(res, sl); strcat(res, sr); return val_str(res);
+    int len_l = (l.type == VAL_STR) ? strlen(l.data.s) : strlen(sl);
+    int len_r = (r.type == VAL_STR) ? strlen(r.data.s) : strlen(sr);
+    int old_alloc_size = (len_l + 1 + 7) & ~7;
+    int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;
+    if (nr_arena && (char*)nr_arena->current == sl + old_alloc_size) {
+        if (nr_arena->current + (new_alloc_size - old_alloc_size) > nr_arena->heap_end) exit(1);
+        memcpy(sl + len_l, sr, len_r);
+        sl[len_l + len_r] = '\0';
+        nr_arena->current += (new_alloc_size - old_alloc_size);
+        return val_str(sl);
+    }
+    char* res = nr_alloc(len_l + len_r + 1);
+    memcpy(res, sl, len_l);
+    memcpy(res + len_l, sr, len_r);
+    res[len_l + len_r] = '\0';
+    return val_str(res);
   }
   if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {
     double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;
@@ -88,14 +102,41 @@ static inline Value nr_rt_eq(Value l, Value r) {
   return val_bool(0);
 }
 
-static inline Value nr_rt_lt(Value l, Value r) {
-  if (l.type == VAL_INT && r.type == VAL_INT) return val_bool(l.data.i < r.data.i);
+static inline bool nr_rt_lt_bool(Value l, Value r) {
+  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i < r.data.i;
   if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {
     double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;
     double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;
-    return val_bool(lv < rv);
+    return lv < rv;
   }
-  return val_bool(0);
+  return false;
+}
+static inline bool nr_rt_gt_bool(Value l, Value r) {
+  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i > r.data.i;
+  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {
+    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;
+    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;
+    return lv > rv;
+  }
+  return false;
+}
+static inline bool nr_rt_ge_bool(Value l, Value r) {
+  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i >= r.data.i;
+  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {
+    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;
+    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;
+    return lv >= rv;
+  }
+  return false;
+}
+static inline bool nr_rt_le_bool(Value l, Value r) {
+  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i <= r.data.i;
+  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {
+    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;
+    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;
+    return lv <= rv;
+  }
+  return false;
 }
 static int is_safe_path(const char* path) { if (!path) return 0; if (strstr(path, "..")) return 0; return 1; }
 Value nr_rt_read_file(Value path) { if (path.type != VAL_STR) return val_nil(); FILE* f = fopen(path.data.s, "rb"); if (!f) return val_nil(); fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f); char* b = nr_alloc(sz + 1); fread(b, 1, sz, f); b[sz] = 0; fclose(f); return val_str(b); }
@@ -215,7 +256,7 @@ val_func(nr_time_millis);
 
 
 int main(int argc, char** argv) {
-  nr_arena = malloc(sizeof(Arena)); nr_arena->blocks = NULL;
+  size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); nr_arena->heap_start = malloc(heap_size); nr_arena->heap_end = nr_arena->heap_start + heap_size; nr_arena->current = nr_arena->heap_start;
   srand(time(NULL));
   nr_argc = argc; nr_argv = argv;
   Value self = val_nil(); (void)self;
@@ -240,14 +281,13 @@ int main(int argc, char** argv) {
   nr_v_start = ({ Value _f = nr_v_millis; Value _r; if (_f.type == VAL_FUNC && _f.data.func_ptr) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { nr_rt_print(val_error("Function not found: millis")); _r = val_nil(); } _r; });
   nr_v_sum = val_int(0);
   nr_v_i = val_int(0);
-  while (is_truthy(val_bool(nr_v_i.data.i < val_int(10000000).data.i))) {
+  while (nr_rt_lt_bool(nr_v_i, val_int(100000000))) {
   nr_v_sum = nr_rt_add(nr_v_sum, nr_v_i);
   nr_v_i = nr_rt_add(nr_v_i, val_int(1));
   }
 ;
   nr_v_end = ({ Value _f = nr_v_millis; Value _r; if (_f.type == VAL_FUNC && _f.data.func_ptr) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { nr_rt_print(val_error("Function not found: millis")); _r = val_nil(); } _r; });
 nr_rt_print(nr_rt_add(nr_rt_add(nr_rt_add(nr_rt_add(val_str("Nira: "), nr_rt_to_string(val_int(nr_v_end.data.i - nr_v_start.data.i))), val_str(" ms (Result: ")), nr_rt_to_string(nr_v_sum)), val_str(")")));
-
-  ArenaBlock* curr = nr_arena->blocks; while(curr) { ArenaBlock* next = curr->next; free(curr->ptr); free(curr); curr = next; } free(nr_arena);
+  free(nr_arena->heap_start); free(nr_arena);
   return 0; 
 }

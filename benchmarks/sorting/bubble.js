@@ -1,9 +1,6 @@
-console.time("JS Bubble Sort");
 let arr = [];
-for (let i = 0; i < 1000; i++) {
-    arr.push(1000 - i);
-}
-
+for (let i = 0; i < 5000; i++) arr.push(5000 - i);
+let start = Date.now();
 let n = arr.length;
 for (let i = 0; i < n; i++) {
     for (let j = 0; j < n - i - 1; j++) {
@@ -14,5 +11,5 @@ for (let i = 0; i < n; i++) {
         }
     }
 }
-console.timeEnd("JS Bubble Sort");
-console.log(`JavaScript: First: ${arr[0]}, Last: ${arr[999]}`);
+let end = Date.now();
+console.log(`JavaScript: ${end - start} ms (First: ${arr[0]}, Last: ${arr[4999]})`);

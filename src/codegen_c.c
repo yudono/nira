@@ -87,20 +87,13 @@ static void print_runtime(FILE *out) {
           "nr_argc; char** nr_argv;\n");
   fprintf(out, "typedef enum { VAL_NIL, VAL_INT, VAL_FLOAT, VAL_STR, VAL_OBJ, "
                "VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_ERROR } ValueType;\n");
-  fprintf(out, "typedef struct ArenaBlock { void* ptr; struct ArenaBlock* "
-               "next; } ArenaBlock;\n");
-  fprintf(out,
-          "typedef struct { ArenaBlock* blocks; } Arena; Arena* nr_arena;\n");
-  fprintf(out, "void* nr_alloc(size_t sz) { void* p = malloc(sz); ArenaBlock* "
-               "b = malloc(sizeof(ArenaBlock)); b->ptr = p; b->next = "
-               "nr_arena->blocks; nr_arena->blocks = b; return p; }\n");
-  fprintf(out, "void* nr_checkpoint() { return nr_arena->blocks; }\n");
+  fprintf(out, "typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;\n");
+  fprintf(out, "void* nr_alloc(size_t sz) { sz = (sz + 7) & ~7; if (nr_arena->current + sz > nr_arena->heap_end) exit(1); void* p = nr_arena->current; nr_arena->current += sz; return p; }\n");
+  fprintf(out, "void* nr_checkpoint() { return nr_arena->current; }\n");
   fprintf(
       out,
-      "void nr_rollback(void* cp) { ArenaBlock* curr = nr_arena->blocks; "
-      "while(curr && curr != cp) { ArenaBlock* next = curr->next; "
-      "free(curr->ptr); free(curr); curr = next; } nr_arena->blocks = cp; }\n");
-  fprintf(out, "void nr_arena_clear() { nr_rollback(NULL); }\n");
+      "void nr_rollback(void* cp) { if(cp) nr_arena->current = cp; }\n");
+  fprintf(out, "void nr_arena_clear() { nr_arena->current = nr_arena->heap_start; }\n");
   fprintf(out, "char* nr_strdup(const char* s) { char* d = "
                "nr_alloc(strlen(s)+1); strcpy(d, s); return d; }\n");
   fprintf(out,
@@ -114,7 +107,7 @@ static void print_runtime(FILE *out) {
       "static inline Value val_int(long long i) { return (Value){.type = VAL_INT, .data.i = i}; }\n"
       "static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }\n"
       "static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }\n"
-      "Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = nr_strdup(s)}; }\n"
+      "static inline Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = (char*)s}; }\n"
       "Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }\n"
       "Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = "
       "ptr}; }\nbool is_truthy(Value v) { if (v.type == VAL_NIL) return false; "
@@ -213,8 +206,22 @@ static void print_runtime(FILE *out) {
                "VAL_INT) { snprintf(buf_r, 64, \"%%lld\", r.data.i); sr = buf_r; "
                "} else if (r.type == VAL_FLOAT) { snprintf(buf_r, 64, \"%%g\", "
                "r.data.f); sr = buf_r; } else sr = \"nil\";\n");
-  fprintf(out, "    char* res = nr_alloc(strlen(sl) + strlen(sr) + 1); "
-               "strcpy(res, sl); strcat(res, sr); return val_str(res);\n");
+  fprintf(out,               "    int len_l = (l.type == VAL_STR) ? strlen(l.data.s) : strlen(sl);\n"
+               "    int len_r = (r.type == VAL_STR) ? strlen(r.data.s) : strlen(sr);\n"
+               "    int old_alloc_size = (len_l + 1 + 7) & ~7;\n"
+               "    int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;\n"
+               "    if (nr_arena && (char*)nr_arena->current == sl + old_alloc_size) {\n"
+               "        if (nr_arena->current + (new_alloc_size - old_alloc_size) > nr_arena->heap_end) exit(1);\n"
+               "        memcpy(sl + len_l, sr, len_r);\n"
+               "        sl[len_l + len_r] = '\\0';\n"
+               "        nr_arena->current += (new_alloc_size - old_alloc_size);\n"
+               "        return val_str(sl);\n"
+               "    }\n"
+               "    char* res = nr_alloc(len_l + len_r + 1);\n"
+               "    memcpy(res, sl, len_l);\n"
+               "    memcpy(res + len_l, sr, len_r);\n"
+               "    res[len_l + len_r] = '\\0';\n"
+               "    return val_str(res);\n");
   fprintf(out, "  }\n");
   fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
   fprintf(
@@ -250,16 +257,36 @@ static void print_runtime(FILE *out) {
   fprintf(out, "    return val_bool(lv == rv);\n");
   fprintf(out, "  }\n");
   fprintf(out, "  return val_bool(0);\n}\n\n");
-  fprintf(out, "static inline Value nr_rt_lt(Value l, Value r) {\n");
-  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return val_bool(l.data.i < r.data.i);\n");
+  fprintf(out, "static inline bool nr_rt_lt_bool(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i < r.data.i;\n");
   fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
   fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n");
   fprintf(out, "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
-  fprintf(out, "    return val_bool(lv < rv);\n");
-  fprintf(out, "  }\n  return val_bool(0);\n}\n");
+  fprintf(out, "    return lv < rv;\n");
+  fprintf(out, "  }\n  return false;\n}\n");
+  fprintf(out, "static inline bool nr_rt_gt_bool(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i > r.data.i;\n");
+  fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
+  fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n");
+  fprintf(out, "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+  fprintf(out, "    return lv > rv;\n");
+  fprintf(out, "  }\n  return false;\n}\n");
 
-  fprintf(out, "static int is_safe_path(const char* path) { if (!path) return "
-               "0; if (strstr(path, \"..\")) return 0; return 1; }\n");
+  fprintf(out, "static inline bool nr_rt_ge_bool(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i >= r.data.i;\n");
+  fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
+  fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n");
+  fprintf(out, "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+  fprintf(out, "    return lv >= rv;\n");
+  fprintf(out, "  }\n  return false;\n}\n");
+  fprintf(out, "static inline bool nr_rt_le_bool(Value l, Value r) {\n");
+  fprintf(out, "  if (l.type == VAL_INT && r.type == VAL_INT) return l.data.i <= r.data.i;\n");
+  fprintf(out, "  if (l.type == VAL_FLOAT || r.type == VAL_FLOAT) {\n");
+  fprintf(out, "    double lv = (l.type == VAL_FLOAT) ? l.data.f : (double)l.data.i;\n");
+  fprintf(out, "    double rv = (r.type == VAL_FLOAT) ? r.data.f : (double)r.data.i;\n");
+  fprintf(out, "    return lv <= rv;\n");
+  fprintf(out, "  }\n  return false;\n}\n");
+  fprintf(out, "static int is_safe_path(const char* path) { if (!path) return 0; if (strstr(path, \"..\")) return 0; return 1; }\n");
   fprintf(out, "Value nr_rt_read_file(Value path) { if (path.type != VAL_STR) "
                "return val_nil(); FILE* f = fopen(path.data.s, \"rb\"); if "
                "(!f) return val_nil(); fseek(f, 0, SEEK_END); long sz = "
@@ -585,12 +612,12 @@ static void collect_functions(AstNode *node, FILE *out) {
     if (strcmp(node->data.func_decl.name, "anonymous") == 0) {
       char buf[32];
       sprintf(buf, "lambda_%d", ++global_lambda_count);
-      free(node->data.func_decl.name);
+      /* free(node->data.func_decl.name); */
       node->data.func_decl.name = strdup(buf);
     } else if (current_mod) {
       char buf[256];
       sprintf(buf, "%s_%s", current_mod, node->data.func_decl.name);
-      free(node->data.func_decl.name);
+      /* free(node->data.func_decl.name); */
       node->data.func_decl.name = strdup(buf);
     }
     if (function_count < 8192)
@@ -923,10 +950,22 @@ void codegen_c_node(AstNode *node, FILE *out) {
     fprintf(out, "  return ");
     codegen_c_node(node->data.ret.value, out);
     break;
-  case AST_IF:
-    fprintf(out, "  if (is_truthy(");
-    codegen_c_node(node->data.if_stmt.condition, out);
-    fprintf(out, ")) {\n");
+  case AST_IF: {
+    fprintf(out, "  if (");
+    BinOp op = (node->data.if_stmt.condition->type == AST_BINARY) ? node->data.if_stmt.condition->data.binary.op : -1;
+    if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE) {
+        const char* fn = (op == OP_LT) ? "nr_rt_lt_bool" : (op == OP_GT) ? "nr_rt_gt_bool" : (op == OP_LE) ? "nr_rt_le_bool" : "nr_rt_ge_bool";
+        fprintf(out, "%s(", fn);
+        codegen_c_node(node->data.if_stmt.condition->data.binary.left, out);
+        fprintf(out, ", ");
+        codegen_c_node(node->data.if_stmt.condition->data.binary.right, out);
+        fprintf(out, ")");
+    } else {
+        fprintf(out, "is_truthy(");
+        codegen_c_node(node->data.if_stmt.condition, out);
+        fprintf(out, ")");
+    }
+    fprintf(out, ") {\n");
     codegen_c_node(node->data.if_stmt.then_branch, out);
     fprintf(out, "  }");
     if (node->data.if_stmt.else_branch) {
@@ -934,14 +973,26 @@ void codegen_c_node(AstNode *node, FILE *out) {
       codegen_c_node(node->data.if_stmt.else_branch, out);
       fprintf(out, "  }\n");
     }
-    break;
-  case AST_WHILE:
-    fprintf(out, "  while (is_truthy(");
-    codegen_c_node(node->data.while_stmt.condition, out);
-    fprintf(out, ")) {\n");
+    } break;
+  case AST_WHILE: {
+    fprintf(out, "  while (");
+    BinOp op = (node->data.while_stmt.condition->type == AST_BINARY) ? node->data.while_stmt.condition->data.binary.op : -1;
+    if (op == OP_LT || op == OP_GT || op == OP_LE || op == OP_GE) {
+        const char* fn = (op == OP_LT) ? "nr_rt_lt_bool" : (op == OP_GT) ? "nr_rt_gt_bool" : (op == OP_LE) ? "nr_rt_le_bool" : "nr_rt_ge_bool";
+        fprintf(out, "%s(", fn);
+        codegen_c_node(node->data.while_stmt.condition->data.binary.left, out);
+        fprintf(out, ", ");
+        codegen_c_node(node->data.while_stmt.condition->data.binary.right, out);
+        fprintf(out, ")");
+    } else {
+        fprintf(out, "is_truthy(");
+        codegen_c_node(node->data.while_stmt.condition, out);
+        fprintf(out, ")");
+    }
+    fprintf(out, ") {\n");
     codegen_c_node(node->data.while_stmt.body, out);
     fprintf(out, "  }\n");
-    break;
+    } break;
   case AST_FOR: {
     fprintf(out, "  if (");
     codegen_c_node(node->data.for_stmt.iterable, out);
@@ -969,7 +1020,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
       fprintf(out, "  set_field(nr_v_%s, \"%s\", ", t, d + 1);
       codegen_c_node(node->data.assign.value, out);
       fprintf(out, ");\n");
-      free(t);
+      /* free(t); */
     } else {
       fprintf(out, "  nr_v_%s = ", node->data.assign.target);
       codegen_c_node(node->data.assign.value, out);
@@ -1025,7 +1076,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
         for (int i = 1; i < part_count; i++)
           fprintf(out, ", \"%s\")", parts[i]);
       }
-      free(n);
+      /* free(n); */
     } else if (is_function(name))
       fprintf(out, "val_func(nr_%s)", name);
     else {
@@ -1377,7 +1428,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
         }
       }
       fprintf(out, "} _r; })");
-      free(t);
+      /* free(t); */
     } else {
       if (strcmp(n, "__builtin_millis") == 0) {
         fprintf(out, "nr_rt_millis()");
@@ -1650,8 +1701,9 @@ void codegen_c_program(AstNode *node, FILE *out) {
     }
   if (m_node) {
     fprintf(out, "int main(int argc, char** argv) {\n");
-    fprintf(out,
-            "  nr_arena = malloc(sizeof(Arena)); nr_arena->blocks = NULL;\n");
+    fprintf(out, "  size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); "
+               "nr_arena->heap_start = malloc(heap_size); nr_arena->heap_end = nr_arena->heap_start + heap_size; "
+               "nr_arena->current = nr_arena->heap_start;\n");
     fprintf(out, "  srand(time(NULL));\n  nr_argc = argc; nr_argv = argv;\n  "
                  "Value self = val_nil(); (void)self;\n");
     for (int i = 0; i < global_var_count; i++)
@@ -1659,9 +1711,7 @@ void codegen_c_program(AstNode *node, FILE *out) {
     current_pref = NULL;
     codegen_c_node(node, out);
     codegen_c_node(m_node->data.func_decl.body, out);
-    fprintf(out, "\n  ArenaBlock* curr = nr_arena->blocks; while(curr) { "
-                 "ArenaBlock* next = curr->next; free(curr->ptr); free(curr); "
-                 "curr = next; } free(nr_arena);\n");
+    fprintf(out, "  free(nr_arena->heap_start); free(nr_arena);\n");
     fprintf(out, "  return 0; \n}\n");
   }
 }

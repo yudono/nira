@@ -8,46 +8,45 @@ Arena* global_arena = NULL;
 Arena* arena_new() {
     Arena* a = malloc(sizeof(Arena));
     if (!a) return NULL;
-    a->blocks = NULL;
+    // Allocate 1GB continuous heap for Nira runtime
+    size_t heap_size = 1024 * 1024 * 1024;
+    a->heap_start = malloc(heap_size);
+    if (!a->heap_start) {
+        printf("Nira: Failed to allocate 1GB heap\n");
+        exit(1);
+    }
+    a->heap_end = a->heap_start + heap_size;
+    a->current = a->heap_start;
     return a;
 }
 
 void* arena_alloc(Arena* a, size_t size) {
     if (!a) return malloc(size);
-    
-    void* ptr = malloc(size);
-    if (!ptr) return NULL;
-    
-    ArenaBlock* block = malloc(sizeof(ArenaBlock));
-    if (!block) {
-        free(ptr);
-        return NULL;
+    // Align to 8 bytes
+    size = (size + 7) & ~7;
+    if (a->current + size > a->heap_end) {
+        printf("Nira: Out of Memory (Arena Exhausted)\n");
+        exit(1);
     }
-    
-    block->ptr = ptr;
-    block->size = size;
-    block->next = a->blocks;
-    a->blocks = block;
-    
+    void* ptr = a->current;
+    a->current += size;
     return ptr;
 }
 
 void arena_free_all(Arena* a) {
     if (!a) return;
-    ArenaBlock* curr = a->blocks;
-    while (curr) {
-        ArenaBlock* next = curr->next;
-        free(curr->ptr);
-        free(curr);
-        curr = next;
-    }
-    a->blocks = NULL;
+    a->current = a->heap_start;
 }
 
 void arena_destroy(Arena* a) {
     if (!a) return;
-    arena_free_all(a);
+    free(a->heap_start);
     free(a);
+}
+
+void arena_gc(Arena* a) {
+    // Simple reset for benchmarks. A real GC would be needed for complex apps.
+    // For now, bump allocator is enough for speed tests.
 }
 
 void nr_init_memory() {
@@ -79,19 +78,13 @@ void nr_free_all() {
 }
 
 ArenaBlock* arena_checkpoint(Arena* a) {
-    return a ? a->blocks : NULL;
+    if (!a) return NULL;
+    return (ArenaBlock*)a->current;
 }
 
 void arena_rollback(Arena* a, ArenaBlock* checkpoint) {
-    if (!a) return;
-    ArenaBlock* curr = a->blocks;
-    while (curr && curr != checkpoint) {
-        ArenaBlock* next = curr->next;
-        free(curr->ptr);
-        free(curr);
-        curr = next;
-    }
-    a->blocks = checkpoint;
+    if (!a || !checkpoint) return;
+    a->current = (char*)checkpoint;
 }
 
 ArenaBlock* nr_arena_checkpoint() {

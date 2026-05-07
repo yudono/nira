@@ -4,9 +4,9 @@ main:
     start = millis()
     s = ""
     i = 0
-    while i < 10000:
+    while i < 100000:
         s = s + "a"
         i = i + 1
-    end = millis()
     
+    end = millis()
     print("Nira: " + toString(end - start) + " ms (Length: " + toString(len(s)) + ")")
