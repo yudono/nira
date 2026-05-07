@@ -14,9 +14,14 @@ Kami baru saja menyelesaikan fase penguatan (**hardening**) pada arsitektur runt
 - **Fix Deteksi Float**: Memperbaiki bug kritis di mana parser salah mendeteksi angka bulat sebagai float karena adanya titik di baris-baris berikutnya pada file sumber.
 - **Akurasi AST**: Memperbaiki `ast_new` untuk menggunakan token yang tepat, sehingga pelacakan baris/kolom pada pesan error menjadi jauh lebih akurat.
 
-### 3. Paritas Fungsional Kompiler
+### 3. FFI & JIT Native Module Compiler
+- **Interpreter FFI**: Mode `nira run` kini dibekali **JIT C-Compiler** bawaan. Nira akan mengekstrak blok `native:` secara aman, memanggil `clang -shared`, menyimpannya ke `.nira/cache/`, lalu me-*load* module menggunakan `dlopen()`. Hal ini menjamin paritas penuh antara mode kompilasi (`nira build`) dan eksekusi dinamis.
+- **Aturan Keamanan Memori Eksternal**: Tipe data penunjuk (C-Pointers) yang dikembalikan oleh pustaka eksternal (seperti `sqlite3_column_text`) **wajib** diduplikasi ke dalam Arena Memory milik Nira menggunakan `nr_strdup(...)` agar tidak menjadi *Dangling Pointers* saat obyek eksternal didealokasi.
+
+### 4. Paritas Fungsional Kompiler
 - **Dukungan Literal Float**: Menambahkan penanganan `AST_LITERAL_FLOAT` di generator kode C yang sebelumnya hilang.
 - **Stabilitas Objek & Array**: Memperbaiki korupsi data pada inisialisasi literal objek dalam kode C yang dihasilkan.
+- **Built-in Map**: Mengintegrasikan fungsi bawaan seperti `toString` dan `toInt` di generator C dan *runtime*.
 
 ---
 

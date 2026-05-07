@@ -38,6 +38,8 @@ void eval_set_field(Object* obj, const char* key, Value val) {
 // --- Include Paths ---
 static char* include_paths[16];
 static int include_path_count = 0;
+extern char nira_std_lib_path[1024];
+extern char nira_global_libs_path[1024];
 
 void nr_eval_add_include_path(const char* path) {
     if (include_path_count < 16) {
@@ -1224,7 +1226,7 @@ Value eval(AstNode* node, Environment* env) {
                 source = read_file_internal(full_path);
             }
             if (!source) {
-                snprintf(full_path, sizeof(full_path), "lib/%s.nr", clean_path);
+                snprintf(full_path, sizeof(full_path), "%s/%s.nr", nira_std_lib_path, clean_path);
                 source = read_file_internal(full_path);
             }
             if (!source) {
@@ -1233,6 +1235,15 @@ Value eval(AstNode* node, Environment* env) {
             }
             if (!source) {
                 snprintf(full_path, sizeof(full_path), ".nira/libs/%s.nr", clean_path);
+                source = read_file_internal(full_path);
+            }
+            // Try global libs (nira install -g)
+            if (!source) {
+                snprintf(full_path, sizeof(full_path), "%s/%s/%s.nr", nira_global_libs_path, clean_path, clean_path);
+                source = read_file_internal(full_path);
+            }
+            if (!source) {
+                snprintf(full_path, sizeof(full_path), "%s/%s.nr", nira_global_libs_path, clean_path);
                 source = read_file_internal(full_path);
             }
             if (!source) {
@@ -1322,16 +1333,26 @@ Value eval(AstNode* node, Environment* env) {
                         fprintf(f, "%s\n", node->data.native_stmt.code);
                         fclose(f);
                         
-                        char cmd[1024];
+                        // Compute include path from nira_std_lib_path (sibling of lib/)
+                        char nira_include_path[1024];
+                        strncpy(nira_include_path, nira_std_lib_path, sizeof(nira_include_path));
+                        char* lib_suffix = strrchr(nira_include_path, '/');
+                        if (lib_suffix) {
+                            strcpy(lib_suffix + 1, "include");
+                        } else {
+                            strcpy(nira_include_path, "include");
+                        }
+
+                        char cmd[2048];
                         char link_flags[512] = "";
                         for (int i=0; i<node->data.native_stmt.link_count; i++) {
                             strcat(link_flags, node->data.native_stmt.links[i]);
                             strcat(link_flags, " ");
                         }
 #ifdef __APPLE__
-                        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC -Iinclude %s -undefined dynamic_lookup -o %s %s", link_flags, so_file, c_file);
+                        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC -I%s %s -undefined dynamic_lookup -o %s %s", nira_include_path, link_flags, so_file, c_file);
 #else
-                        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC -Iinclude %s -o %s %s", link_flags, so_file, c_file);
+                        snprintf(cmd, sizeof(cmd), "clang -shared -fPIC -I%s %s -o %s %s", nira_include_path, link_flags, so_file, c_file);
 #endif
                         int res = system(cmd);
                         if (res != 0) {

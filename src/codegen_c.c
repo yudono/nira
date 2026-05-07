@@ -18,6 +18,8 @@ void nr_add_include_path(const char *path) {
 }
 
 extern char *read_file(const char *path);
+extern char nira_std_lib_path[1024];
+extern char nira_global_libs_path[1024];
 static char *nr_read_file(const char *path) {
   FILE *file = fopen(path, "rb");
   if (!file)
@@ -446,7 +448,7 @@ static AstNode *nr_load_module(const char *m) {
       break;
   }
   if (!src) {
-    sprintf(path, "lib/%s.nr", m);
+    sprintf(path, "%s/%s.nr", nira_std_lib_path, m);
     src = nr_read_file(path);
   } // only devs
   if (!src) {
@@ -455,6 +457,15 @@ static AstNode *nr_load_module(const char *m) {
   }
   if (!src) {
     sprintf(path, ".nira/libs/%s.nr", m);
+    src = nr_read_file(path);
+  }
+  // Try global libs (nira install -g)
+  if (!src) {
+    sprintf(path, "%s/%s/%s.nr", nira_global_libs_path, m, m);
+    src = nr_read_file(path);
+  }
+  if (!src) {
+    sprintf(path, "%s/%s.nr", nira_global_libs_path, m);
     src = nr_read_file(path);
   }
   if (!src) {

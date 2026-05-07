@@ -13,9 +13,43 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+#ifdef __linux__
+#include <limits.h>
+#endif
+
 int g_argc;
 char **g_argv;
 
+char nira_std_lib_path[1024] = "lib";
+char nira_global_libs_path[1024] = ".nira/libs";
+
+void resolve_std_lib_path() {
+    char exe_dir[1024] = "";
+#ifdef __APPLE__
+    uint32_t size = sizeof(exe_dir);
+    if (_NSGetExecutablePath(exe_dir, &size) != 0) {
+        strcpy(exe_dir, "");
+    }
+#elif __linux__
+    ssize_t count = readlink("/proc/self/exe", exe_dir, sizeof(exe_dir) - 1);
+    if (count != -1) {
+        exe_dir[count] = '\0';
+    }
+#endif
+    if (exe_dir[0]) {
+        char *last_slash = strrchr(exe_dir, '/');
+        if (last_slash) {
+            *last_slash = '\0';
+            // lib/ is sibling to executable
+            snprintf(nira_std_lib_path, sizeof(nira_std_lib_path), "%s/lib", exe_dir);
+            // global .nira/libs/ is also sibling to executable
+            snprintf(nira_global_libs_path, sizeof(nira_global_libs_path), "%s/.nira/libs", exe_dir);
+        }
+    }
+}
 void codegen_c_program(AstNode *node, FILE *out);
 char* codegen_get_links();
 void nr_add_include_path(const char *path);
@@ -51,11 +85,25 @@ char *read_file(const char *path) {
 
 void handle_install(int argc, char **argv) {
   if (argc < 3) {
-    printf("Usage: nira install {user}/{repo}:{version}\n");
+    printf("Usage: nira install [-g] {user}/{repo}:{version}\n");
     return;
   }
-  char *pkg = argv[2];
-  printf("📦 Installing %s...\n", pkg);
+
+  int is_global = 0;
+  char *pkg = NULL;
+
+  if (strcmp(argv[2], "-g") == 0) {
+    is_global = 1;
+    if (argc < 4) {
+      printf("Usage: nira install -g {user}/{repo}:{version}\n");
+      return;
+    }
+    pkg = argv[3];
+  } else {
+    pkg = argv[2];
+  }
+
+  printf("📦 Installing %s %s...\n", pkg, is_global ? "(global)" : "(local)");
 
   // Simple parsing of user/repo:version
   char* slash = strchr(pkg, '/');
@@ -68,30 +116,42 @@ void handle_install(int argc, char **argv) {
   char repo_name[128] = {0};
   strncpy(repo_name, slash + 1, colon - slash - 1);
 
-  // Create .nira directory
-  mkdir(".nira", 0755);
-  char libs_path[256];
-  snprintf(libs_path, sizeof(libs_path), ".nira/libs");
-  mkdir(libs_path, 0755);
-
-  // In a real world, this would be a git clone or HTTP download
-  // For now, we mock the installation by creating the directory
-  char pkg_path[512];
-  snprintf(pkg_path, sizeof(pkg_path), ".nira/libs/%s", repo_name);
-  mkdir(pkg_path, 0755);
-
-  // Create nira.json if it doesn't exist
-  FILE *f = fopen("nira.json", "r");
-  if (!f) {
-    f = fopen("nira.json", "w");
-    fprintf(f, "{\n  \"dependencies\": {\n    \"%s\": \"latest\"\n  }\n}\n", pkg);
-    fclose(f);
-    printf("📄 Created nira.json\n");
+  char base_path[1024];
+  if (is_global) {
+    // Global: install to <nira_executable_dir>/.nira/libs/
+    char nira_dir[1024];
+    strncpy(nira_dir, nira_global_libs_path, sizeof(nira_dir));
+    // nira_global_libs_path already points to <exe_dir>/.nira/libs
+    char nira_dotdir[1024];
+    // Create <exe_dir>/.nira/
+    strncpy(nira_dotdir, nira_global_libs_path, sizeof(nira_dotdir));
+    char *libs_suffix = strrchr(nira_dotdir, '/');
+    if (libs_suffix) *libs_suffix = '\0';
+    mkdir(nira_dotdir, 0755);
+    mkdir(nira_global_libs_path, 0755);
+    snprintf(base_path, sizeof(base_path), "%s/%s", nira_global_libs_path, repo_name);
   } else {
-    fclose(f);
+    // Local: install to <workspace>/.nira/libs/
+    mkdir(".nira", 0755);
+    mkdir(".nira/libs", 0755);
+    snprintf(base_path, sizeof(base_path), ".nira/libs/%s", repo_name);
+  }
+  mkdir(base_path, 0755);
+
+  if (!is_global) {
+    // Create nira.json if it doesn't exist (local only)
+    FILE *f = fopen("nira.json", "r");
+    if (!f) {
+      f = fopen("nira.json", "w");
+      fprintf(f, "{\n  \"dependencies\": {\n    \"%s\": \"latest\"\n  }\n}\n", pkg);
+      fclose(f);
+      printf("📄 Created nira.json\n");
+    } else {
+      fclose(f);
+    }
   }
 
-  printf("✅ Installed %s to %s\n", pkg, pkg_path);
+  printf("✅ Installed %s to %s\n", pkg, base_path);
 }
 
 void print_help() {
@@ -99,7 +159,8 @@ void print_help() {
   printf("Usage:\n");
   printf("  nira run <file>       Transpile and run the script immediately\n");
   printf("  nira build <file>     Transpile and compile to a standalone binary\n");
-  printf("  nira install <pkg>    Install a dependency (user/repo:version)\n");
+  printf("  nira install <pkg>    Install a dependency locally\n");
+  printf("  nira install -g <pkg> Install a dependency globally\n");
   printf("  nira help             Show this help message\n\n");
 }
 
@@ -113,6 +174,7 @@ void handle_signal(int sig) {
 }
 
 int main(int argc, char *argv[]) {
+  resolve_std_lib_path();
   g_argc = argc;
   g_argv = argv;
   nr_init_memory();
@@ -189,7 +251,7 @@ int main(int argc, char *argv[]) {
     child_env->source = source;
     child_env->filename = filename;
     nr_eval_add_include_path(".");
-    nr_eval_add_include_path("lib");
+    nr_eval_add_include_path(nira_std_lib_path);
     eval(program, child_env);
     Value main_func = env_get(child_env, "main");
     if (main_func.type == VAL_FUNC) {
