@@ -39,5 +39,3 @@ run args:
     id = args[arg_offset + 1]
     task.delete(id)
     print("Task " + id + " deleted")
-
-run(sys.args())

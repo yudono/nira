@@ -827,7 +827,6 @@ void nr_cli_init() { static bool init = false; if (init) return; init = true;
   set_field(nr_v_sys, "exit", val_func(nr_sys_exit));
 ;
 val_func(nr_cli_run);
-nr_cli_run(val_nil(), ({ Value _t = nr_v_sys; Value _f = get_field(_t, "args"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { _r = nr_sys_args(_t, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); } _r; }), val_nil(), val_nil(), val_nil(), val_nil());
 }
 
 
