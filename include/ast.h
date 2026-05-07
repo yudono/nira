@@ -29,7 +29,8 @@ typedef enum {
     AST_PASS,
     AST_LITERAL_BOOL,
     AST_LITERAL_NULL,
-    AST_ERROR
+    AST_ERROR,
+    AST_NATIVE
 } AstNodeType;
 
 struct AstNode;
@@ -158,6 +159,15 @@ typedef struct AstNode {
         struct {
             struct AstNode* message;
         } error_expr;
+        
+        // Native (FFI/Linker info)
+        struct {
+            char** links;
+            int link_count;
+            char** headers;
+            int header_count;
+            char* code;
+        } native_stmt;
     } data;
 } AstNode;
 

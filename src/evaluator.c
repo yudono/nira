@@ -10,7 +10,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <sqlite3.h>
 #include <errno.h>
 
 void set_field(Object* obj, const char* key, Value val) {
@@ -527,87 +526,6 @@ static Value eval_call(AstNode* node, Environment* env) {
         }
         if (strcmp(full_name, "__builtin_time_now") == 0) {
             return val_int((int)time(NULL));
-        }
-        if (strcmp(full_name, "__builtin_db_open") == 0) {
-            return eval(node->data.call.args[0], env);
-        }
-        if (strcmp(full_name, "__builtin_db_exec") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            Value sql = eval(node->data.call.args[1], env);
-            Value params = eval(node->data.call.args[2], env);
-            if (path.type == VAL_STR && sql.type == VAL_STR) {
-                sqlite3* db; if (sqlite3_open(path.data.s, &db) == SQLITE_OK) {
-                    sqlite3_stmt* stmt;
-                    if (sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, 0) == SQLITE_OK) {
-                        if (params.type == VAL_ARR) {
-                            for (int i=0; i<params.data.arr->count; i++) {
-                                Value v = *params.data.arr->elements[i];
-                                if (v.type == VAL_INT || v.type == VAL_BOOL) sqlite3_bind_int(stmt, i+1, v.data.i);
-                                else if (v.type == VAL_STR) sqlite3_bind_text(stmt, i+1, v.data.s, -1, SQLITE_TRANSIENT);
-                                else if (v.type == VAL_NIL) sqlite3_bind_null(stmt, i+1);
-                            }
-                        }
-                        sqlite3_step(stmt);
-                        sqlite3_finalize(stmt);
-                    }
-                    sqlite3_close(db);
-                }
-            }
-            return val_nil();
-        }
-        // SQLite query execution using prepare/step
-        if (strcmp(full_name, "__builtin_db_query") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            Value sql = eval(node->data.call.args[1], env);
-            Value params = eval(node->data.call.args[2], env);
-            Value a = val_arr();
-            if (path.type == VAL_STR && sql.type == VAL_STR) {
-                sqlite3* db; if (sqlite3_open(path.data.s, &db) == SQLITE_OK) {
-                    sqlite3_stmt* stmt;
-                    if (sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, 0) == SQLITE_OK) {
-                        if (params.type == VAL_ARR) {
-                            for (int i=0; i<params.data.arr->count; i++) {
-                                Value v = *params.data.arr->elements[i];
-                                if (v.type == VAL_INT || v.type == VAL_BOOL) sqlite3_bind_int(stmt, i+1, v.data.i);
-                                else if (v.type == VAL_STR) sqlite3_bind_text(stmt, i+1, v.data.s, -1, SQLITE_TRANSIENT);
-                                else if (v.type == VAL_NIL) sqlite3_bind_null(stmt, i+1);
-                            }
-                        }
-                        int cols = sqlite3_column_count(stmt);
-                        while (sqlite3_step(stmt) == SQLITE_ROW) {
-                            Value o = val_obj();
-                            for (int i=0; i<cols; i++) {
-                                const char* name = sqlite3_column_name(stmt, i);
-                                const char* text = (const char*)sqlite3_column_text(stmt, i);
-                                // Set field in Nira object
-                                if (o.data.obj->count >= o.data.obj->capacity) {
-                                    int old_cap = o.data.obj->capacity;
-                                    o.data.obj->capacity *= 2;
-                                    o.data.obj->keys = nr_realloc(o.data.obj->keys, sizeof(char*) * old_cap, sizeof(char*) * o.data.obj->capacity);
-                                    o.data.obj->values = nr_realloc(o.data.obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * o.data.obj->capacity);
-                                }
-                                o.data.obj->keys[o.data.obj->count] = nr_strdup(name);
-                                o.data.obj->values[o.data.obj->count] = nr_malloc(sizeof(Value));
-
-                                *o.data.obj->values[o.data.obj->count] = val_str((char*)text);
-                                o.data.obj->count++;
-                            }
-                            if (a.data.arr->count >= a.data.arr->capacity) {
-                                int old_cap = a.data.arr->capacity;
-                                a.data.arr->capacity *= 2;
-                                a.data.arr->elements = nr_realloc(a.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * a.data.arr->capacity);
-                            }
-                            a.data.arr->elements[a.data.arr->count] = nr_malloc(sizeof(Value));
-
-                            *a.data.arr->elements[a.data.arr->count] = o;
-                            a.data.arr->count++;
-                        }
-                        sqlite3_finalize(stmt);
-                    }
-                    sqlite3_close(db);
-                }
-            }
-            return a;
         }
         if (strcmp(full_name, "__builtin_delay") == 0) {
             Value ms = eval(node->data.call.args[0], env);
@@ -1199,6 +1117,14 @@ Value eval(AstNode* node, Environment* env) {
             }
             if (!source) {
                 snprintf(full_path, sizeof(full_path), "lib/%s.nr", clean_path);
+                source = read_file_internal(full_path);
+            }
+            if (!source) {
+                snprintf(full_path, sizeof(full_path), ".nira/libs/%s/%s.nr", clean_path, clean_path);
+                source = read_file_internal(full_path);
+            }
+            if (!source) {
+                snprintf(full_path, sizeof(full_path), ".nira/libs/%s.nr", clean_path);
                 source = read_file_internal(full_path);
             }
             if (!source) {

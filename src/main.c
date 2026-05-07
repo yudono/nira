@@ -17,6 +17,7 @@ int g_argc;
 char **g_argv;
 
 void codegen_c_program(AstNode *node, FILE *out);
+char* codegen_get_links();
 void nr_add_include_path(const char *path);
 void nr_eval_add_include_path(const char *path);
 
@@ -48,12 +49,58 @@ char *read_file(const char *path) {
   return buffer;
 }
 
+void handle_install(int argc, char **argv) {
+  if (argc < 3) {
+    printf("Usage: nira install {user}/{repo}:{version}\n");
+    return;
+  }
+  char *pkg = argv[2];
+  printf("📦 Installing %s...\n", pkg);
+
+  // Simple parsing of user/repo:version
+  char* slash = strchr(pkg, '/');
+  char* colon = strchr(pkg, ':');
+  if (!slash || !colon) {
+    printf("Error: Invalid package format. Use {user}/{repo}:{version}\n");
+    return;
+  }
+
+  char repo_name[128] = {0};
+  strncpy(repo_name, slash + 1, colon - slash - 1);
+
+  // Create .nira directory
+  mkdir(".nira", 0755);
+  char libs_path[256];
+  snprintf(libs_path, sizeof(libs_path), ".nira/libs");
+  mkdir(libs_path, 0755);
+
+  // In a real world, this would be a git clone or HTTP download
+  // For now, we mock the installation by creating the directory
+  char pkg_path[512];
+  snprintf(pkg_path, sizeof(pkg_path), ".nira/libs/%s", repo_name);
+  mkdir(pkg_path, 0755);
+
+  // Create nira.json if it doesn't exist
+  FILE *f = fopen("nira.json", "r");
+  if (!f) {
+    f = fopen("nira.json", "w");
+    fprintf(f, "{\n  \"dependencies\": {\n    \"%s\": \"latest\"\n  }\n}\n", pkg);
+    fclose(f);
+    printf("📄 Created nira.json\n");
+  } else {
+    fclose(f);
+  }
+
+  printf("✅ Installed %s to %s\n", pkg, pkg_path);
+}
+
 void print_help() {
   printf("Nira Programming Language CLI\n\n");
   printf("Usage:\n");
-  printf("  nira run <file>    Transpile and run the script immediately\n");
-  printf("  nira build <file>  Transpile and compile to a standalone binary\n");
-  printf("  nira help          Show this help message\n\n");
+  printf("  nira run <file>       Transpile and run the script immediately\n");
+  printf("  nira build <file>     Transpile and compile to a standalone binary\n");
+  printf("  nira install <pkg>    Install a dependency (user/repo:version)\n");
+  printf("  nira help             Show this help message\n\n");
 }
 
 static pid_t g_child_pid = 0;
@@ -84,6 +131,9 @@ int main(int argc, char *argv[]) {
 
   if (strcmp(cmd, "help") == 0) {
     print_help();
+    return 0;
+  } else if (strcmp(cmd, "install") == 0) {
+    handle_install(argc, argv);
     return 0;
   } else if (strcmp(cmd, "test") == 0) {
     printf("Running all tests...\n");
@@ -253,9 +303,14 @@ int main(int argc, char *argv[]) {
     char bin_path[512];
     snprintf(bin_path, sizeof(bin_path), "build/%s", bin_name);
 
-    char compile_cmd[1024];
+    char compile_cmd[2048];
+#ifdef __APPLE__
     snprintf(compile_cmd, sizeof(compile_cmd),
-             "clang -w -O3 -o %s %s -lsqlite3", bin_path, out_name);
+             "clang -w -O3 -o %s %s %s -I/opt/homebrew/include -L/opt/homebrew/lib", bin_path, out_name, codegen_get_links());
+#else
+    snprintf(compile_cmd, sizeof(compile_cmd),
+             "clang -w -O3 -o %s %s %s", bin_path, out_name, codegen_get_links());
+#endif
 
     int status = system(compile_cmd);
     if (status == 0) {

@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "yudono/sqlite3:latest": "latest"
+  }
+}

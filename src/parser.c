@@ -439,12 +439,62 @@ static AstNode* parse_logical(Parser* p) {
     return expr;
 }
 
+static AstNode* parse_native_stmt(Parser* p) {
+    AstNode* node = ast_new(AST_NATIVE, p->current);
+    consume(p, TOKEN_COLON, "Expect ':' after native");
+    while (match(p, TOKEN_NEWLINE)) ;
+    consume(p, TOKEN_INDENT, "Expect indent after native");
+
+    int link_cap = 4;
+    node->data.native_stmt.links = nr_malloc(sizeof(char*) * link_cap);
+    node->data.native_stmt.link_count = 0;
+
+    int head_cap = 4;
+    node->data.native_stmt.headers = nr_malloc(sizeof(char*) * head_cap);
+    node->data.native_stmt.header_count = 0;
+    node->data.native_stmt.code = NULL;
+
+    while (!check(p, TOKEN_DEDENT) && !check(p, TOKEN_EOF)) {
+        if (match(p, TOKEN_NEWLINE)) continue;
+        if (match(p, TOKEN_IDENT)) {
+            char* cmd = copy_token_text(p->previous);
+            if (strcmp(cmd, "link") == 0) {
+                consume(p, TOKEN_STRING, "Expect string after 'link'");
+                if (node->data.native_stmt.link_count >= link_cap) {
+                    node->data.native_stmt.links = nr_realloc(node->data.native_stmt.links, sizeof(char*) * link_cap, sizeof(char*) * link_cap * 2);
+                    link_cap *= 2;
+                }
+                node->data.native_stmt.links[node->data.native_stmt.link_count++] = strip_quotes(p->previous);
+            } else if (strcmp(cmd, "header") == 0) {
+                consume(p, TOKEN_STRING, "Expect string after 'header'");
+                if (node->data.native_stmt.header_count >= head_cap) {
+                    node->data.native_stmt.headers = nr_realloc(node->data.native_stmt.headers, sizeof(char*) * head_cap, sizeof(char*) * head_cap * 2);
+                    head_cap *= 2;
+                }
+                node->data.native_stmt.headers[node->data.native_stmt.header_count++] = strip_quotes(p->previous);
+            } else if (strcmp(cmd, "code") == 0) {
+                consume(p, TOKEN_COLON, "Expect ':' after 'code'");
+                consume(p, TOKEN_STRING, "Expect string after 'code:'");
+                node->data.native_stmt.code = strip_quotes(p->previous);
+            }
+        } else {
+            advance(p); // Skip unknown tokens in native block
+        }
+    }
+    if (check(p, TOKEN_DEDENT)) advance(p);
+    return node;
+}
+
 static AstNode* parse_expression(Parser* p) {
     return parse_logical(p);
 }
 
 static AstNode* parse_statement(Parser* p) {
     while (match(p, TOKEN_NEWLINE)) ;
+
+    if (match(p, TOKEN_KEYWORD_NATIVE)) {
+        return parse_native_stmt(p);
+    }
 
     if (match(p, TOKEN_KEYWORD_PASS)) {
         return ast_new(AST_PASS, p->current);

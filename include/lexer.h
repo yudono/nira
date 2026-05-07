@@ -53,6 +53,7 @@ typedef enum {
     TOKEN_OP_GT,      // >
     TOKEN_KEYWORD_FN,
     TOKEN_KEYWORD_PRINT,
+    TOKEN_KEYWORD_NATIVE,
 } TokenType;
 
 typedef struct {

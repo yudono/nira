@@ -70,6 +70,7 @@ static TokenType check_keyword(const char* text, int len) {
     if (strncmp(text, "null", len) == 0 && len == 4) return TOKEN_NULL;
     if (strncmp(text, "error", len) == 0 && len == 5) return TOKEN_KEYWORD_ERROR;
     if (strncmp(text, "fn", len) == 0 && len == 2) return TOKEN_KEYWORD_FN;
+    if (strncmp(text, "native", len) == 0 && len == 6) return TOKEN_KEYWORD_NATIVE;
     return TOKEN_IDENT;
 }
 
@@ -283,6 +284,7 @@ const char* token_type_to_string(TokenType type) {
         case TOKEN_OP_GE: return "GE";
         case TOKEN_OP_LT: return "LT";
         case TOKEN_OP_GT: return "GT";
+        case TOKEN_KEYWORD_NATIVE: return "NATIVE";
         default: return "UNKNOWN";
     }
 }

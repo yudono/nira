@@ -6,9 +6,9 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <sqlite3.h>
 #include <regex.h>
 #include <ctype.h>
+#include <sqlite3.h>
 #ifdef _WIN32
   #include <winsock2.h>
   #include <ws2tcpip.h>
@@ -101,46 +101,17 @@ Value nr_rt_exec(Value cmd) { if (cmd.type != VAL_STR) return val_int(-1); for(c
 Value nr_rt_str_index_of(Value s, Value sub) { if (s.type != VAL_STR || sub.type != VAL_STR) return val_int(-1); char* p = strstr(s.data.s, sub.data.s); if (!p) return val_int(-1); int res = (int)(p - s.data.s); return val_int(res); }
 Value nr_rt_str_match(Value s, Value regex_str) { if (s.type != VAL_STR || regex_str.type != VAL_STR) return val_bool(0); regex_t regex; int reti = regcomp(&regex, regex_str.data.s, REG_EXTENDED); if (reti) return val_bool(0); reti = regexec(&regex, s.data.s, 0, NULL, 0); regfree(&regex); return val_bool(!reti); }
 Value nr_rt_args() { Value a = val_arr(); for(int i=0; i<nr_argc; i++) nr_rt_push(a, val_str(nr_argv[i])); return a; }
+void nr_rt_exit(Value code) { exit(code.type == VAL_INT ? code.data.i : 0); }
+Value nr_rt_str_replace(Value s, Value old, Value new_str) {
+  if (s.type != VAL_STR || old.type != VAL_STR || new_str.type != VAL_STR) return s;
+  char *res; int i, count = 0; int oldlen = strlen(old.data.s); int newlen = strlen(new_str.data.s);
+  for (i = 0; s.data.s[i] != '\0'; i++) { if (strstr(&s.data.s[i], old.data.s) == &s.data.s[i]) { count++; i += oldlen - 1; } }
+  res = (char *)nr_alloc(i + count * (newlen - oldlen) + 1);
+  i = 0; while (*s.data.s) { if (strstr(s.data.s, old.data.s) == s.data.s) { strcpy(&res[i], new_str.data.s); i += newlen; s.data.s += oldlen; } else res[i++] = *s.data.s++; } res[i] = '\0'; return val_str(res);
+}
 char* val_to_json(Value v) { if (v.type == VAL_INT) { char* b = nr_alloc(32); sprintf(b, "%d", v.data.i); return b; } if (v.type == VAL_STR) { char* b = nr_alloc(strlen(v.data.s) + 3); sprintf(b, "\"%s\"", v.data.s); return b; } if (v.type == VAL_BOOL) return nr_strdup(v.data.i ? "true" : "false"); if (v.type == VAL_ARR) { char* res = nr_strdup("["); for (int i=0; i<v.data.arr->count; i++) { char* item = val_to_json(*v.data.arr->elements[i]); char* old = res; res = nr_alloc(strlen(old) + strlen(item) + 3); sprintf(res, "%s%s%s", old, item, i < v.data.arr->count-1 ? "," : ""); } char* old = res; res = nr_alloc(strlen(old) + 2); sprintf(res, "%s]", old); return res; } if (v.type == VAL_OBJ) { char* res = nr_strdup("{"); for (int i=0; i<v.data.obj->count; i++) { char* val = val_to_json(*v.data.obj->values[i]); char* old = res; res = nr_alloc(strlen(old) + strlen(v.data.obj->keys[i]) + strlen(val) + 6); sprintf(res, "%s\"%s\":%s%s", old, v.data.obj->keys[i], val, i < v.data.obj->count-1 ? "," : ""); } char* old = res; res = nr_alloc(strlen(old) + 2); sprintf(res, "%s}", old); return res; } return nr_strdup("null"); }
 Value nr_rt_json_encode(Value v) { return val_str(val_to_json(v)); }
 
-Value nr_rt_db_open(Value path) { return path; }
-void bind_val(sqlite3_stmt* stmt, int idx, Value v) {
-  if (v.type == VAL_INT || v.type == VAL_BOOL) sqlite3_bind_int(stmt, idx, v.data.i);
-  else if (v.type == VAL_STR) sqlite3_bind_text(stmt, idx, v.data.s, -1, SQLITE_TRANSIENT);
-  else if (v.type == VAL_NIL) sqlite3_bind_null(stmt, idx);
-}
-Value nr_rt_db_exec(Value db, Value sql, Value params) {
-  if (sql.type != VAL_STR || db.type != VAL_STR) return val_int(0);
-  sqlite3* h; if (sqlite3_open(db.data.s, &h) != SQLITE_OK) return val_int(0);
-  sqlite3_stmt* stmt; if (sqlite3_prepare_v2(h, sql.data.s, -1, &stmt, 0) == SQLITE_OK) {
-    if (params.type == VAL_ARR) { for (int i=0; i<params.data.arr->count; i++) bind_val(stmt, i+1, *params.data.arr->elements[i]); }
-    sqlite3_step(stmt); sqlite3_finalize(stmt);
-  }
-  sqlite3_close(h); return val_int(1);
-}
-Value nr_rt_db_query(Value db, Value sql, Value params) {
-  Value a = val_arr(); if (sql.type != VAL_STR || db.type != VAL_STR) return a;
-  sqlite3* h; if (sqlite3_open(db.data.s, &h) != SQLITE_OK) return a;
-  sqlite3_stmt* stmt; if (sqlite3_prepare_v2(h, sql.data.s, -1, &stmt, 0) == SQLITE_OK) {
-    if (params.type == VAL_ARR) { for (int i=0; i<params.data.arr->count; i++) bind_val(stmt, i+1, *params.data.arr->elements[i]); }
-    int cols = sqlite3_column_count(stmt);
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-      Value o = val_obj();
-      for (int i=0; i<cols; i++) {
-        const char* name = sqlite3_column_name(stmt, i); int type = sqlite3_column_type(stmt, i);
-        Value v = val_nil();
-        if (type == SQLITE_INTEGER) v = val_int(sqlite3_column_int(stmt, i));
-        else if (type == SQLITE_NULL) v = val_nil();
-        else v = val_str((char*)sqlite3_column_text(stmt, i));
-        set_field(o, name, v);
-      }
-      nr_rt_push(a, o);
-    }
-    sqlite3_finalize(stmt);
-  }
-  sqlite3_close(h); return a;
-}
 Value nr_rt_json_decode(Value s) {
   if (s.type != VAL_STR) return val_nil();
   char* p = s.data.s; while(*p == ' ' || *p == '[' || *p == ']') p++;
@@ -210,10 +181,49 @@ Value nr_http_create_ctx(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3
 Value nr_lambda_6(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
 Value nr_lambda_7(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
 void nr_task_init();
-void nr_db_init();
-Value nr_db_open(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
-Value nr_lambda_8(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
-Value nr_lambda_9(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
+void nr_sqlite3_init();
+
+    static void bind_val(sqlite3_stmt* stmt, int idx, Value v) {
+      if (v.type == VAL_INT || v.type == VAL_BOOL) sqlite3_bind_int(stmt, idx, v.data.i);
+      else if (v.type == VAL_STR) sqlite3_bind_text(stmt, idx, v.data.s, -1, SQLITE_TRANSIENT);
+      else if (v.type == VAL_NIL) sqlite3_bind_null(stmt, idx);
+    }
+    Value __native_sqlite3_open(Value path) { return path; }
+    Value __native_sqlite3_exec(Value db, Value sql, Value params) {
+      if (sql.type != VAL_STR || db.type != VAL_STR) return val_int(0);
+      sqlite3* h; if (sqlite3_open(db.data.s, &h) != SQLITE_OK) return val_int(0);
+      sqlite3_stmt* stmt; if (sqlite3_prepare_v2(h, sql.data.s, -1, &stmt, 0) == SQLITE_OK) {
+        if (params.type == VAL_ARR) { for (int i=0; i<params.data.arr->count; i++) bind_val(stmt, i+1, *params.data.arr->elements[i]); }
+        sqlite3_step(stmt); sqlite3_finalize(stmt);
+      }
+      sqlite3_close(h); return val_int(1);
+    }
+    Value __native_sqlite3_query(Value db, Value sql, Value params) {
+      Value a = val_arr(); if (sql.type != VAL_STR || db.type != VAL_STR) return a;
+      sqlite3* h; if (sqlite3_open(db.data.s, &h) != SQLITE_OK) return a;
+      sqlite3_stmt* stmt; if (sqlite3_prepare_v2(h, sql.data.s, -1, &stmt, 0) == SQLITE_OK) {
+        if (params.type == VAL_ARR) { for (int i=0; i<params.data.arr->count; i++) bind_val(stmt, i+1, *params.data.arr->elements[i]); }
+        int cols = sqlite3_column_count(stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+          Value o = val_obj();
+          for (int i=0; i<cols; i++) {
+            const char* name = sqlite3_column_name(stmt, i); int type = sqlite3_column_type(stmt, i);
+            Value v = val_nil();
+            if (type == SQLITE_INTEGER) v = val_int(sqlite3_column_int(stmt, i));
+            else if (type == SQLITE_NULL) v = val_nil();
+            else v = val_str((char*)sqlite3_column_text(stmt, i));
+            set_field(o, name, v);
+          }
+          nr_rt_push(a, o);
+        }
+        sqlite3_finalize(stmt);
+      }
+      sqlite3_close(h); return a;
+    }
+  
+Value nr_sqlite3_open(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
+Value nr_sqlite3_exec(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
+Value nr_sqlite3_query(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
 void nr_sys_init();
 Value nr_sys_args(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
 Value nr_sys_now(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5);
@@ -280,12 +290,12 @@ Value nr_v_lambda_6;
 Value nr_v_data;
 Value nr_v_lambda_7;
 Value nr_v_task;
+Value nr_v_sqlite3;
+Value nr_v_sqlite3_open;
+Value nr_v_sqlite3_exec;
 Value nr_v_db;
-Value nr_v__handle;
-Value nr_v_db_open;
-Value nr_v_lambda_8;
 Value nr_v_sql;
-Value nr_v_lambda_9;
+Value nr_v_sqlite3_query;
 Value nr_v_sys;
 Value nr_v_sys_args;
 Value nr_v_sys_now;
@@ -448,8 +458,8 @@ Value nr_lambda_5(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value
 Value nr_http_serve(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
   Value nr_v_req = nr_v_a1;
   if (nr_v__routes.type == VAL_ARR) {
-  for (int _i10 = 0; _i10 < nr_v__routes.data.arr->count; _i10++) {
-    nr_v_r = *nr_v__routes.data.arr->elements[_i10];
+  for (int _i8 = 0; _i8 < nr_v__routes.data.arr->count; _i8++) {
+    nr_v_r = *nr_v__routes.data.arr->elements[_i8];
   if (is_truthy(({ Value _l = nr_rt_eq(get_field(nr_v_r, "method"), get_field(nr_v_req, "method")); is_truthy(_l) ? nr_http_match_path(val_nil(), get_field(nr_v_r, "path"), get_field(nr_v_req, "path"), val_nil(), val_nil(), val_nil()) : _l; }))) {
   nr_v_ctx = nr_http_create_ctx(val_nil(), nr_v_req, get_field(nr_v_r, "path"), val_nil(), val_nil(), val_nil());
   return ({ Value _t = nr_v_r; Value _f = get_field(_t, "handler"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, nr_v_ctx, val_nil(), val_nil(), val_nil(), val_nil()); else { if (nr_v_handler.type == VAL_FUNC && nr_v_handler.data.func_ptr) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))nr_v_handler.data.func_ptr)(val_nil(), _t, val_nil(), val_nil(), val_nil(), val_nil()); else _r = val_nil(); } _r; });
@@ -530,30 +540,37 @@ val_func(nr_http_match_path);
 val_func(nr_http_create_ctx);
 }
 
-Value nr_db_open(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
+Value nr_sqlite3_open(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
   Value nr_v_path = nr_v_a1;
-  nr_v__handle = nr_rt_db_open(nr_v_path);
-  return ({ Value _o = val_obj(); set_field(_o, "handle", nr_v__handle); set_field(_o, "exec", val_func(nr_lambda_8)); set_field(_o, "query", val_func(nr_lambda_9)); _o; });
+  return __native_sqlite3_open(nr_v_path);
 
   return val_nil(); }
 
-Value nr_lambda_8(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
-  Value nr_v_sql = nr_v_a1;
-  Value nr_v_params = nr_v_a2;
-  return nr_rt_db_exec(nr_v__handle, nr_v_sql, ({ Value _l = nr_v_params; is_truthy(_l) ? _l : ({ Value _a = val_arr(); _a; }); }));
+Value nr_sqlite3_exec(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
+  Value nr_v_db = nr_v_a1;
+  Value nr_v_sql = nr_v_a2;
+  Value nr_v_params = nr_v_a3;
+  return __native_sqlite3_exec(nr_v_db, nr_v_sql, ({ Value _l = nr_v_params; is_truthy(_l) ? _l : ({ Value _a = val_arr(); _a; }); }));
+
   return val_nil(); }
 
-Value nr_lambda_9(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
-  Value nr_v_sql = nr_v_a1;
-  Value nr_v_params = nr_v_a2;
-  return nr_rt_db_query(nr_v__handle, nr_v_sql, ({ Value _l = nr_v_params; is_truthy(_l) ? _l : ({ Value _a = val_arr(); _a; }); }));
+Value nr_sqlite3_query(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
+  Value nr_v_db = nr_v_a1;
+  Value nr_v_sql = nr_v_a2;
+  Value nr_v_params = nr_v_a3;
+  return __native_sqlite3_query(nr_v_db, nr_v_sql, ({ Value _l = nr_v_params; is_truthy(_l) ? _l : ({ Value _a = val_arr(); _a; }); }));
+
   return val_nil(); }
 
-void nr_db_init() { static bool init = false; if (init) return; init = true;
-  if (nr_v_db.type == VAL_NIL) nr_v_db = val_obj();
-  set_field(nr_v_db, "open", val_func(nr_db_open));
-  nr_v__handle = val_nil();
-val_func(nr_db_open);
+void nr_sqlite3_init() { static bool init = false; if (init) return; init = true;
+  if (nr_v_sqlite3.type == VAL_NIL) nr_v_sqlite3 = val_obj();
+  set_field(nr_v_sqlite3, "open", val_func(nr_sqlite3_open));
+  set_field(nr_v_sqlite3, "exec", val_func(nr_sqlite3_exec));
+  set_field(nr_v_sqlite3, "query", val_func(nr_sqlite3_query));
+;
+val_func(nr_sqlite3_open);
+val_func(nr_sqlite3_exec);
+val_func(nr_sqlite3_query);
 }
 
 Value nr_sys_args(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
@@ -584,7 +601,7 @@ val_func(nr_sys_exit);
 
 Value nr_task_prepare(Value self, Value nr_v_a1, Value nr_v_a2, Value nr_v_a3, Value nr_v_a4, Value nr_v_a5) {
   if (is_truthy(nr_rt_eq(nr_v__db, val_nil()))) {
-  nr_v__db = ({ Value _t = nr_v_db; Value _f = get_field(_t, "open"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()); else { _r = nr_db_open(_t, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()); } _r; });
+  nr_v__db = ({ Value _t = nr_v_sqlite3; Value _f = get_field(_t, "open"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()); else { _r = nr_sqlite3_open(_t, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()); } _r; });
 ({ Value _t = nr_v__db; Value _f = get_field(_t, "exec"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, val_str("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, done BOOLEAN, created_at INTEGER)"), val_nil(), val_nil(), val_nil(), val_nil()); else { _r = val_nil(); } _r; });
   };
 
@@ -634,9 +651,11 @@ void nr_task_init() { static bool init = false; if (init) return; init = true;
   set_field(nr_v_task, "create", val_func(nr_task_create));
   set_field(nr_v_task, "update", val_func(nr_task_update));
   set_field(nr_v_task, "delete", val_func(nr_task_delete));
-  nr_db_init();
-  if (nr_v_db.type == VAL_NIL) nr_v_db = val_obj();
-  set_field(nr_v_db, "open", val_func(nr_db_open));
+  nr_sqlite3_init();
+  if (nr_v_sqlite3.type == VAL_NIL) nr_v_sqlite3 = val_obj();
+  set_field(nr_v_sqlite3, "open", val_func(nr_sqlite3_open));
+  set_field(nr_v_sqlite3, "exec", val_func(nr_sqlite3_exec));
+  set_field(nr_v_sqlite3, "query", val_func(nr_sqlite3_query));
 ;
   nr_sys_init();
   if (nr_v_sys.type == VAL_NIL) nr_v_sys = val_obj();
@@ -751,8 +770,8 @@ nr_rt_print(nr_rt_add(val_str("Task added: "), nr_v_title));
   nr_v_items = ({ Value _t = nr_v_task; Value _f = get_field(_t, "all"); Value _r; if (_f.type == VAL_FUNC) _r = ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(_t, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); else { _r = nr_task_all(_t, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); } _r; });
 nr_rt_print(val_str("--- Tasks ---"));
   if (nr_v_items.type == VAL_ARR) {
-  for (int _i11 = 0; _i11 < nr_v_items.data.arr->count; _i11++) {
-    nr_v_t = *nr_v_items.data.arr->elements[_i11];
+  for (int _i9 = 0; _i9 < nr_v_items.data.arr->count; _i9++) {
+    nr_v_t = *nr_v_items.data.arr->elements[_i9];
   nr_v_status = val_str("[ ]");
   if (is_truthy(get_field(nr_v_t, "done"))) {
   nr_v_status = val_str("[x]");
@@ -844,12 +863,12 @@ int main(int argc, char** argv) {
   nr_v_data = val_nil();
   nr_v_lambda_7 = val_nil();
   nr_v_task = val_nil();
+  nr_v_sqlite3 = val_nil();
+  nr_v_sqlite3_open = val_nil();
+  nr_v_sqlite3_exec = val_nil();
   nr_v_db = val_nil();
-  nr_v__handle = val_nil();
-  nr_v_db_open = val_nil();
-  nr_v_lambda_8 = val_nil();
   nr_v_sql = val_nil();
-  nr_v_lambda_9 = val_nil();
+  nr_v_sqlite3_query = val_nil();
   nr_v_sys = val_nil();
   nr_v_sys_args = val_nil();
   nr_v_sys_now = val_nil();

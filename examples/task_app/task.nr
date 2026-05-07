@@ -1,11 +1,11 @@
-import "db"
+import "sqlite3"
 import "sys"
 
 _db = null
 
 prepare:
   if _db == null:
-    _db = db.open("tasks.db")
+    _db = sqlite3.open("tasks.db")
     _db.exec("CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, done BOOLEAN, created_at INTEGER)")
 
 all:
