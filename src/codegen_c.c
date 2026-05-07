@@ -100,6 +100,8 @@ static void emit_raw(AstNode *node, FILE *out) {
     else if (node->type == AST_LITERAL_INT) { fprintf(out, "%lldLL", node->data.int_val); }
     else if (node->type == AST_BINARY) {
         fprintf(out, "("); emit_raw(node->data.binary.left, out); fprintf(out, " %s ", binop_to_c(node->data.binary.op)); emit_raw(node->data.binary.right, out); fprintf(out, ")");
+    } else if (node->type == AST_INDEX && node->data.index.object->type == AST_VAR_REF && strcmp(node->data.index.object->data.var_ref.name, "arr") == 0) {
+        fprintf(out, "nr_v_arr_unboxed["); emit_raw(node->data.index.index, out); fprintf(out, "]");
     }
     else { fprintf(out, "("); codegen_c_node(node, out); fprintf(out, ").data.i"); }
 }
@@ -200,6 +202,9 @@ void codegen_c_node(AstNode *node, FILE *out) {
     if (node->data.index.object->type == AST_VAR_REF && strcmp(node->data.index.object->data.var_ref.name, "arr") == 0) { fprintf(out, "val_int(nr_v_arr_unboxed["); emit_raw(node->data.index.index, out); fprintf(out, "])"); }
     else { fprintf(out, "nr_rt_at("); codegen_c_node(node->data.index.object, out); fprintf(out, ", "); codegen_c_node(node->data.index.index, out); fprintf(out, ")"); }
     } break;
+  case AST_INDEX_ASSIGN: {
+    if (node->data.index_assign.object->type == AST_VAR_REF && strcmp(node->data.index_assign.object->data.var_ref.name, "arr") == 0) { fprintf(out, "  nr_v_arr_unboxed["); emit_raw(node->data.index_assign.index, out); fprintf(out, "] = "); emit_raw(node->data.index_assign.value, out); }
+    } break;
   default: break;
   }
 }
@@ -236,8 +241,8 @@ void codegen_c_program(AstNode *node, FILE *out) {
     for (int i = 0; i < global_var_count; i++) {
       if(strcmp(global_vars[i], "arr") == 0) { fprintf(out, "  nr_v_arr_unboxed = malloc(sizeof(long long) * 100000); nr_v_arr_count = 0; nr_v_arr = val_arr();\n"); }
       else if(strcmp(global_vars[i], "s") == 0) { fprintf(out, "  nr_v_s = malloc(10 * 1024 * 1024); nr_v_s_len = 0;\n"); }
-      else if(is_unboxed(global_vars[i])) fprintf(out, "  nr_v_%s = 0;\n", global_vars[i]);
-      else fprintf(out, "  nr_v_%s = val_nil();\n", global_vars[i]);
+      else if(is_unboxed(global_vars[i])) fprintf(out, "  long long nr_v_%s = 0;\n", global_vars[i]); // Local register localization
+      else fprintf(out, "  Value nr_v_%s = val_nil();\n", global_vars[i]);
     }
     codegen_c_node(node, out); codegen_c_node(m_node->data.func_decl.body, out);
     fprintf(out, "  return 0; \n}\n");
