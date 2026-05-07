@@ -6,7 +6,7 @@ import "lib_test"
 import "system_test"
 
 
-main():
+main:
   alias_test.main()
   basic_test.main()
   control_flow.main()

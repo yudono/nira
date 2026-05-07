@@ -1,4 +1,4 @@
-export main():
+export main:
   print("--- Testing Math ---")
   import math
   res = math.sum([10, 20])

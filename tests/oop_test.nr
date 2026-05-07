@@ -1,14 +1,14 @@
 # OOP / Method Sharing Test for Nira
 
 # Hoisted functions (Method templates)
-getName():
+getName:
   return self.name
 
-greet(msg):
+greet msg:
   return msg + " " + self.name
 
 # Factory function with closure
-createUser(name, age):
+createUser name, age:
   return {
     name: name
     age: age
@@ -16,11 +16,11 @@ createUser(name, age):
     getName: getName
     greet: greet
     # Inline closure (Unique per instance)
-    getInfo: fn():
+    getInfo: fn:
       return self.name + " is " + self.age
   }
 
-main():
+main:
   print("--- Testing Method Sharing ---")
   u1 = createUser("Budi", 25)
   u2 = createUser("Ani", 22)

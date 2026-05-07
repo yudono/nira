@@ -1,6 +1,6 @@
 import math as m
 
-test_logic():
+test_logic:
   print("Logic Test:")
   a = true
   b = false
@@ -13,7 +13,7 @@ test_logic():
   if b or a:
     print("b or a is true")
 
-test_while():
+test_while:
   print("While Test:")
   i = 0
   while i < 10:
@@ -25,7 +25,7 @@ test_while():
     print(i)
   print("done while")
 
-test_null_error():
+test_null_error:
   print("Null/Error Test:")
   val = null
   if val == null:
@@ -35,7 +35,7 @@ test_null_error():
   res = error("not found")
   print(res)
 
-export main():
+export main:
   test_logic()
   test_while()
   test_null_error()

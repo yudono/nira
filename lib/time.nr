@@ -1,7 +1,7 @@
 # Time Library for Nira
 
-export now():
+export now:
   return __builtin_time_now()
 
-export sleep(ms):
+export sleep ms:
   return __builtin_delay(ms)

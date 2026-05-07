@@ -8,4 +8,4 @@ main:
   if len(args) > 1:
     cli.run(args)
   else:
-    api.start()
+    api.main()

@@ -201,12 +201,19 @@ static AstNode* parse_primary(Parser* p) {
     if (match(p, TOKEN_KEYWORD_FN)) {
         AstNode* node = ast_new(AST_FUNC_DECL, p->current);
         node->data.func_decl.name = strdup("anonymous");
-        consume(p, TOKEN_LPAREN, "Expect '(' after 'fn'");
+        
         int capacity = 8;
         int count = 0;
         char** params = nr_malloc(sizeof(char*) * capacity);
-        while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
-            consume(p, TOKEN_IDENT, "Expect parameter name");
+
+        if (check(p, TOKEN_LPAREN)) {
+            report_error(p, p->current, "Anonymous functions should not use parentheses. Use 'fn p1 p2:' instead.");
+            return NULL;
+        }
+
+        // Command-style parameters: fn p1 p2:
+        while (check(p, TOKEN_IDENT)) {
+            advance(p);
             if (count >= capacity) {
                 int old_cap = capacity;
                 capacity *= 2;
@@ -215,7 +222,7 @@ static AstNode* parse_primary(Parser* p) {
             params[count++] = copy_token_text(p->previous);
             if (match(p, TOKEN_COMMA)) {}
         }
-        consume(p, TOKEN_RPAREN, "Expect ')' after parameters");
+        
         node->data.func_decl.params = params;
         node->data.func_decl.param_count = count;
         
@@ -449,15 +456,7 @@ static AstNode* parse_statement(Parser* p) {
         return ast_new(AST_CONTINUE, p->current);
     }
 
-    if (match(p, TOKEN_KEYWORD_PRINT)) {
-        Token ident = p->previous;
-        AstNode* node = ast_new(AST_CALL, ident);
-        node->data.call.name = strdup("print");
-        node->data.call.arg_count = 1;
-        node->data.call.args = nr_malloc(sizeof(AstNode*));
-        node->data.call.args[0] = parse_expression(p);
-        return node;
-    }
+    // Removed special print handling to treat it as normal function call
 
     if (match(p, TOKEN_KEYWORD_RETURN)) {
         AstNode* node = ast_new(AST_RETURN, p->current);
@@ -642,45 +641,21 @@ static AstNode* parse_statement(Parser* p) {
             int count = 0;
             char** params = nr_malloc(sizeof(char*) * capacity);
             
-            if (match(p, TOKEN_LPAREN)) {
-                if (match(p, TOKEN_LBRACE)) {
-                    node->data.func_decl.is_unpacking = 1;
-                    while (!check(p, TOKEN_RBRACE) && !check(p, TOKEN_EOF)) {
-                        consume(p, TOKEN_IDENT, "Expect parameter name");
-                        if (count >= capacity) {
-                            int old_cap = capacity;
-                            capacity *= 2;
-                            params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
-                        }
-                        params[count++] = copy_token_text(p->previous);
-                        if (match(p, TOKEN_COMMA)) {}
-                    }
-                    consume(p, TOKEN_RBRACE, "Expect '}' after parameters");
-                } else {
-                    while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
-                        consume(p, TOKEN_IDENT, "Expect parameter name");
-                        if (count >= capacity) {
-                            int old_cap = capacity;
-                            capacity *= 2;
-                            params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
-                        }
-                        params[count++] = copy_token_text(p->previous);
-                        if (match(p, TOKEN_COMMA)) {}
-                    }
+            if (check(p, TOKEN_LPAREN)) {
+                report_error(p, p->current, "Function declarations should not use parentheses. Use 'name param1 param2:' instead.");
+                return NULL;
+            }
+
+            // Command-style parameters: IDENT p1 p2:
+            while (check(p, TOKEN_IDENT)) {
+                advance(p);
+                if (count >= capacity) {
+                    int old_cap = capacity;
+                    capacity *= 2;
+                    params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
                 }
-                consume(p, TOKEN_RPAREN, "Expect ')' after parameters");
-            } else {
-                // Command-style parameters: IDENT p1 p2:
-                while (check(p, TOKEN_IDENT)) {
-                    advance(p);
-                    if (count >= capacity) {
-                        int old_cap = capacity;
-                        capacity *= 2;
-                        params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
-                    }
-                    params[count++] = copy_token_text(p->previous);
-                    if (match(p, TOKEN_COMMA)) {}
-                }
+                params[count++] = copy_token_text(p->previous);
+                if (match(p, TOKEN_COMMA)) {}
             }
             
             node->data.func_decl.params = params;

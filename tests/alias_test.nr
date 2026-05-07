@@ -1,4 +1,4 @@
-export main():
+export main:
   import math as m
 
   print("Namespace Test:")
@@ -26,7 +26,7 @@ export main():
     print(u.name)
 
   # Method Call Sugar Test
-  getName(u):
+  getName u:
     return u.name
 
   print("Method Sugar Test:")

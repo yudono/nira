@@ -1,4 +1,4 @@
-export main():
+export main:
   print("--- Basic Test ---")
   a = 10
   b = 20

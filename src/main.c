@@ -13,6 +13,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+int g_argc;
+char **g_argv;
+
 void codegen_c_program(AstNode *node, FILE *out);
 void nr_add_include_path(const char *path);
 void nr_eval_add_include_path(const char *path);
@@ -63,6 +66,8 @@ void handle_signal(int sig) {
 }
 
 int main(int argc, char *argv[]) {
+  g_argc = argc;
+  g_argv = argv;
   nr_init_memory();
   signal(SIGINT, handle_signal);
   signal(SIGTERM, handle_signal);

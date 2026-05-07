@@ -457,6 +457,25 @@ static Value eval_call(AstNode* node, Environment* env) {
             free(full_name);
             return val_nil();
         }
+        if (strcmp(full_name, "__builtin_args") == 0) {
+            extern int g_argc;
+            extern char** g_argv;
+            Value a = val_arr();
+            // Start from argv[2] (the script name) or argv[3] if there are more
+            // Actually, let's just return all of them after 'nira run script.nr'
+            int start = 2; // nira run script.nr arg1 arg2
+            for (int i = start; i < g_argc; i++) {
+                if (a.data.arr->count >= a.data.arr->capacity) {
+                    a.data.arr->capacity *= 2;
+                    a.data.arr->elements = realloc(a.data.arr->elements, sizeof(Value*) * a.data.arr->capacity);
+                }
+                a.data.arr->elements[a.data.arr->count] = nr_malloc(sizeof(Value));
+                *a.data.arr->elements[a.data.arr->count] = val_str(g_argv[i]);
+                a.data.arr->count++;
+            }
+            free(full_name);
+            return a;
+        }
         if (strcmp(full_name, "__builtin_len") == 0) {
             Value arg = eval(node->data.call.args[0], env);
             if (arg.type == VAL_RETURN) arg = *arg.data.return_val;

@@ -1,25 +1,25 @@
 # Math Library for Nira
 
-export max(a, b):
+export max a, b:
   if a > b:
     return a
   return b
 
-export min(a, b):
+export min a, b:
   if a < b:
     return a
   return b
 
-export abs(n):
+export abs n:
   if n < 0:
     return 0 - n
   return n
 
-export sum(items):
+export sum items:
   total = 0
   for item in items:
     total = total + item
   return total
 
-export random():
+export random:
   return __builtin_random()
