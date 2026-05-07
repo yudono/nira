@@ -28,8 +28,8 @@ export main:
   print("")
   print("Multi-line Strings:")
   multi = """This is
-a multi-line
-string"""
+  a multi-line
+  string"""
   print(multi)
 
   multi_with_code = """function main:
