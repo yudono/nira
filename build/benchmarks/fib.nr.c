@@ -33,10 +33,10 @@ void nr_arena_clear() { nr_rollback(NULL); }
 char* nr_strdup(const char* s) { char* d = nr_alloc(strlen(s)+1); strcpy(d, s); return d; }
 struct Value; typedef struct Value { ValueType type; union { int i; double f; char* s; struct { char** keys; struct Value** values; int count; int capacity; }* obj; struct { struct Value** elements; int count; int capacity; }* arr; void* func_ptr; } data; } Value;
 
-Value val_nil() { return (Value){.type = VAL_NIL}; }
-Value val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }
-Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
-Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }
+static inline Value val_nil() { return (Value){.type = VAL_NIL}; }
+static inline Value val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }
+static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }
+static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }
 Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = nr_strdup(s)}; }
 Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }
 Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = ptr}; }

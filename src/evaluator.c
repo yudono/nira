@@ -18,6 +18,95 @@
 void* dl_handles[64];
 int dl_handle_count = 0;
 
+typedef struct ResolverScope {
+    struct ResolverScope* parent;
+    char* vars[256];
+    int count;
+} ResolverScope;
+
+static void nr_resolve_node(AstNode* node, ResolverScope* scope) {
+    if (!node) return;
+    switch (node->type) {
+        case AST_PROGRAM:
+            for (int i = 0; i < node->data.program.count; i++)
+                nr_resolve_node(node->data.program.statements[i], scope);
+            break;
+        case AST_FUNC_DECL: do_func_decl: {
+            ResolverScope inner = { .parent = scope, .count = 0 };
+            for (int i = 0; i < node->data.func_decl.param_count; i++) {
+                inner.vars[inner.count++] = node->data.func_decl.params[i];
+            }
+            nr_resolve_node(node->data.func_decl.body, &inner);
+            node->data.func_decl.local_count = inner.count;
+            break;
+        }
+        case AST_VAR_REF: do_var_ref: {
+            node->data.var_ref.slot = -1;
+            ResolverScope* s = scope;
+            while (s) {
+                for (int i = 0; i < s->count; i++) {
+                    if (strcmp(node->data.var_ref.name, s->vars[i]) == 0) {
+                        // For now, only resolve if it's in the CURRENT scope (local)
+                        // This is a simplification for performance
+                        if (s == scope) node->data.var_ref.slot = i;
+                        break;
+                    }
+                }
+                if (node->data.var_ref.slot != -1) break;
+                s = s->parent;
+            }
+            break;
+        }
+        case AST_ASSIGN: do_assign: {
+            node->data.assign.slot = -1;
+            int found = -1;
+            for (int i = 0; i < scope->count; i++) {
+                if (strcmp(node->data.assign.target, scope->vars[i]) == 0) {
+                    found = i; break;
+                }
+            }
+            if (found == -1 && scope->count < 256) {
+                found = scope->count;
+                scope->vars[scope->count++] = node->data.assign.target;
+            }
+            node->data.assign.slot = found;
+            nr_resolve_node(node->data.assign.value, scope);
+            break;
+        }
+        case AST_BINARY:
+            nr_resolve_node(node->data.binary.left, scope);
+            nr_resolve_node(node->data.binary.right, scope);
+            break;
+        case AST_CALL:
+            for (int i = 0; i < node->data.call.arg_count; i++)
+                nr_resolve_node(node->data.call.args[i], scope);
+            break;
+        case AST_IF:
+            nr_resolve_node(node->data.if_stmt.condition, scope);
+            nr_resolve_node(node->data.if_stmt.then_branch, scope);
+            nr_resolve_node(node->data.if_stmt.else_branch, scope);
+            break;
+        case AST_RETURN:
+            nr_resolve_node(node->data.ret.value, scope);
+            break;
+        case AST_FOR:
+            nr_resolve_node(node->data.for_stmt.iterable, scope);
+            nr_resolve_node(node->data.for_stmt.body, scope);
+            break;
+        case AST_WHILE:
+            nr_resolve_node(node->data.while_stmt.condition, scope);
+            nr_resolve_node(node->data.while_stmt.body, scope);
+            break;
+        // ... more nodes as needed ...
+        default: break;
+    }
+}
+
+void nr_resolve(AstNode* program) {
+    ResolverScope global = { .parent = NULL, .count = 0 };
+    nr_resolve_node(program, &global);
+}
+
 void eval_set_field(Object* obj, const char* key, Value val) {
     for (int i=0; i<obj->count; i++) {
         if (strcmp(obj->keys[i], key) == 0) {
@@ -93,29 +182,100 @@ Value val_func(AstNode* decl, Environment* closure) {
 
 // --- Environment ---
 
-Environment* env_new(Environment* parent) {
-    Environment* env = nr_malloc(sizeof(Environment));
-    env->vars = NULL;
+static unsigned int hash_key(const char* key) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *key++)) hash = ((hash << 5) + hash) + c;
+    return hash;
+}
+
+#define ENV_POOL_SIZE 1024
+static Environment* env_pool[ENV_POOL_SIZE];
+static int env_pool_count = 0;
+
+Environment* env_new(Environment* parent, int slot_count) {
+    Environment* env = NULL;
+    if (env_pool_count > 0) {
+        env = env_pool[--env_pool_count];
+    } else {
+        env = nr_malloc(sizeof(Environment));
+        env->slots = NULL;
+        env->slots_capacity = 0;
+    }
+    
     env->parent = parent;
+    env->capacity = 4;
+    env->count = 0;
+    env->table = env->fast_table;
+    for (int i = 0; i < 4; i++) env->table[i] = NULL;
+    
+    env->slot_count = slot_count;
+    if (slot_count > 0) {
+        if (slot_count > env->slots_capacity) {
+             env->slots = nr_malloc(sizeof(Value) * slot_count);
+             env->slots_capacity = slot_count;
+        }
+        for (int i = 0; i < slot_count; i++) env->slots[i] = (Value){.type = VAL_NIL};
+    }
+    
     env->source = parent ? parent->source : NULL;
     env->filename = parent ? parent->filename : NULL;
     return env;
 }
 
+void env_free(Environment* env) {
+    if (env_pool_count < ENV_POOL_SIZE) {
+        env_pool[env_pool_count++] = env;
+    }
+}
+
+static void env_resize(Environment* env) {
+    int old_cap = env->capacity;
+    Variable** old_table = env->table;
+    env->capacity *= 2;
+    env->table = nr_malloc(sizeof(Variable*) * env->capacity);
+    for (int i = 0; i < env->capacity; i++) env->table[i] = NULL;
+    
+    for (int i = 0; i < old_cap; i++) {
+        Variable* v = old_table[i];
+        while (v) {
+            Variable* next = v->next;
+            unsigned int h = hash_key(v->name) % env->capacity;
+            v->next = env->table[h];
+            env->table[h] = v;
+            v = next;
+        }
+    }
+}
+
 void env_define(Environment* env, char* name, Value val) {
     if (!name) return;
-    Variable* v = nr_malloc(sizeof(Variable));
+    if (env->count >= env->capacity * 0.75) env_resize(env);
+    
+    unsigned int h = hash_key(name) % env->capacity;
+    Variable* v = env->table[h];
+    while (v) {
+        if (strcmp(v->name, name) == 0) {
+            v->value = val;
+            return;
+        }
+        v = v->next;
+    }
+    
+    v = nr_malloc(sizeof(Variable));
     v->name = nr_strdup(name);
     v->value = val;
-    v->next = env->vars;
-    env->vars = v;
+    v->next = env->table[h];
+    env->table[h] = v;
+    env->count++;
 }
 
 void env_assign(Environment* env, char* name, Value val) {
     if (!name) return;
     Environment* curr = env;
     while (curr) {
-        Variable* v = curr->vars;
+        unsigned int h = hash_key(name) % curr->capacity;
+        Variable* v = curr->table[h];
         while (v) {
             if (strcmp(v->name, name) == 0) {
                 v->value = val;
@@ -128,11 +288,12 @@ void env_assign(Environment* env, char* name, Value val) {
     env_define(env, name, val);
 }
 
-Value env_get(Environment* env, char* name) {
+Value env_get_by_hash(Environment* env, char* name, unsigned int h) {
     if (!name) return val_nil();
     Environment* curr = env;
     while (curr) {
-        Variable* v = curr->vars;
+        unsigned int idx = h % curr->capacity;
+        Variable* v = curr->table[idx];
         while (v) {
             if (v->name && strcmp(v->name, name) == 0) return v->value;
             v = v->next;
@@ -140,6 +301,11 @@ Value env_get(Environment* env, char* name) {
         curr = curr->parent;
     }
     return val_nil();
+}
+
+Value env_get(Environment* env, char* name) {
+    if (!name) return val_nil();
+    return env_get_by_hash(env, name, hash_key(name));
 }
 
 // --- FFI Compatibility ---
@@ -313,95 +479,108 @@ static int is_safe_path(const char* path) {
 // --- Evaluator ---
 
 static Value eval_binary(AstNode* node, Environment* env) {
-    Value left = eval(node->data.binary.left, env);
-    if (left.type == VAL_RETURN || left.type == VAL_BREAK || left.type == VAL_CONTINUE) return left;
+    Value left;
+    AstNode* l_node = node->data.binary.left;
+    if (l_node->type == AST_VAR_REF && l_node->data.var_ref.slot != -1 && env->slots) {
+        left = env->slots[l_node->data.var_ref.slot];
+    } else if (l_node->type == AST_LITERAL_INT) {
+        left = (Value){.type = VAL_INT, .data.i = l_node->data.int_val};
+    } else {
+        left = eval(l_node, env);
+        if (left.type == VAL_RETURN || left.type == VAL_BREAK || left.type == VAL_CONTINUE) return left;
+    }
     
-    char* op = node->data.binary.op;
-    if (!op) return val_nil();
+    BinOp op = node->data.binary.op;
 
-    if (strcmp(op, "and") == 0) {
+    if (op == OP_AND) {
         if (!is_truthy(left)) return left;
         return eval(node->data.binary.right, env);
     }
-    if (strcmp(op, "or") == 0) {
+    if (op == OP_OR) {
         if (is_truthy(left)) return left;
         return eval(node->data.binary.right, env);
     }
-    if (strcmp(op, "not") == 0) {
+    if (op == OP_NOT) {
         return val_bool(!is_truthy(left));
     }
 
-    Value right = eval(node->data.binary.right, env);
-    if (right.type == VAL_RETURN || right.type == VAL_BREAK || right.type == VAL_CONTINUE) return right;
+    Value right;
+    AstNode* r_node = node->data.binary.right;
+    if (r_node) {
+        if (r_node->type == AST_VAR_REF && r_node->data.var_ref.slot != -1 && env->slots) {
+            right = env->slots[r_node->data.var_ref.slot];
+        } else if (r_node->type == AST_LITERAL_INT) {
+            right = (Value){.type = VAL_INT, .data.i = r_node->data.int_val};
+        } else {
+            right = eval(r_node, env);
+            if (right.type == VAL_RETURN || right.type == VAL_BREAK || right.type == VAL_CONTINUE) return right;
+        }
+    } else {
+        right = val_nil();
+    }
 
+    // Optimized Integer Path (Hot Loop)
+    if (left.type == VAL_INT && right.type == VAL_INT) {
+        int l = left.data.i;
+        int r = right.data.i;
+        switch (op) {
+            case OP_ADD: return (Value){.type = VAL_INT, .data.i = l + r};
+            case OP_SUB: return (Value){.type = VAL_INT, .data.i = l - r};
+            case OP_MUL: return (Value){.type = VAL_INT, .data.i = l * r};
+            case OP_LT:  return (Value){.type = VAL_BOOL, .data.i = l < r};
+            case OP_GT:  return (Value){.type = VAL_BOOL, .data.i = l > r};
+            case OP_EQ:  return (Value){.type = VAL_BOOL, .data.i = l == r};
+            case OP_NEQ: return (Value){.type = VAL_BOOL, .data.i = l != r};
+            case OP_LE:  return (Value){.type = VAL_BOOL, .data.i = l <= r};
+            case OP_GE:  return (Value){.type = VAL_BOOL, .data.i = l >= r};
+            case OP_DIV: 
+                if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero");
+                return (Value){.type = VAL_INT, .data.i = l / r};
+            default: break;
+        }
+    }
+
+    // Generic Path
     if ((left.type == VAL_INT || left.type == VAL_FLOAT) && (right.type == VAL_INT || right.type == VAL_FLOAT)) {
         double l = (left.type == VAL_FLOAT) ? left.data.f : (double)left.data.i;
         double r = (right.type == VAL_FLOAT) ? right.data.f : (double)right.data.i;
         int is_f = (left.type == VAL_FLOAT || right.type == VAL_FLOAT);
 
-        if (strcmp(op, "+") == 0) return is_f ? val_float(l + r) : val_int((int)(l + r));
-        if (strcmp(op, "-") == 0) return is_f ? val_float(l - r) : val_int((int)(l - r));
-        if (strcmp(op, "*") == 0) return is_f ? val_float(l * r) : val_int((int)(l * r));
-        if (strcmp(op, "/") == 0) {
-            if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero");
-            return is_f ? val_float(l / r) : val_int((int)(l / r));
+        switch (op) {
+            case OP_ADD: return is_f ? val_float(l + r) : val_int((int)(l + r));
+            case OP_SUB: return is_f ? val_float(l - r) : val_int((int)(l - r));
+            case OP_MUL: return is_f ? val_float(l * r) : val_int((int)(l * r));
+            case OP_DIV: 
+                if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero");
+                return val_float(l / r);
+            case OP_LT: return val_bool(l < r);
+            case OP_GT: return val_bool(l > r);
+            case OP_EQ: return val_bool(l == r);
+            default: break;
         }
-        if (strcmp(op, "%") == 0) {
-            if (r == 0) report_runtime_error(node, env, "MATH", "Modulo by zero");
-            return is_f ? val_float(fmod(l, r)) : val_int(left.data.i % right.data.i);
-        }
-        if (strcmp(op, "**") == 0) {
-            double result = pow(l, r);
-            return is_f ? val_float(result) : val_int((int)result);
-        }
-        if (strcmp(op, ">") == 0) return val_bool(l > r);
-        if (strcmp(op, "<") == 0) return val_bool(l < r);
-        if (strcmp(op, ">=") == 0) return val_bool(l >= r);
-        if (strcmp(op, "<=") == 0) return val_bool(l <= r);
     }
     
-    if (strcmp(op, "==") == 0) {
-        if (left.type == right.type) {
-            if (left.type == VAL_INT) return val_bool(left.data.i == right.data.i);
-            if (left.type == VAL_FLOAT) return val_bool(left.data.f == right.data.f);
-            if (left.type == VAL_STR) return val_bool(strcmp(left.data.s, right.data.s) == 0);
-            if (left.type == VAL_NIL) return val_bool(1);
-            return val_bool(left.data.obj == right.data.obj);
+    if (left.type == VAL_STR && op == OP_ADD) {
+        AstNode* r_node = node->data.binary.right;
+        Value right;
+        if (r_node->type == AST_VAR_REF && r_node->data.var_ref.slot != -1 && env->slots) {
+            right = env->slots[r_node->data.var_ref.slot];
+        } else if (r_node->type == AST_LITERAL_STR) {
+            right = (Value){.type = VAL_STR, .data.s = r_node->data.str_val};
+        } else {
+            right = eval(r_node, env);
         }
-        if ((left.type == VAL_INT || left.type == VAL_FLOAT) && (right.type == VAL_INT || right.type == VAL_FLOAT)) {
-            double l = (left.type == VAL_FLOAT) ? left.data.f : (double)left.data.i;
-            double r = (right.type == VAL_FLOAT) ? right.data.f : (double)right.data.i;
-            return val_bool(l == r);
-        }
-        return val_bool(0);
-    }
-    if (strcmp(op, "!=") == 0) {
-        if (left.type != right.type) return val_bool(1);
-        if (left.type == VAL_INT) return val_bool(left.data.i != right.data.i);
-        if (left.type == VAL_STR) return val_bool(strcmp(left.data.s, right.data.s) != 0);
-        if (left.type == VAL_NIL) return val_bool(0);
-        return val_bool(1);
-    }
-    
-    if (left.type == VAL_STR && strcmp(op, "+") == 0) {
-        char buf[64];
-        char* right_s = NULL;
-        if (right.type == VAL_STR) right_s = nr_strdup(right.data.s);
-        else if (right.type == VAL_INT) { snprintf(buf, sizeof(buf), "%d", right.data.i); right_s = nr_strdup(buf); }
-        else if (right.type == VAL_BOOL) right_s = nr_strdup(right.data.i ? "true" : "false");
-        else if (right.type == VAL_OBJ) right_s = nr_strdup("[Object]");
-        else if (right.type == VAL_ARR) right_s = nr_strdup("[Array]");
-        else right_s = nr_strdup("nil");
         
-        char* res = malloc(strlen(left.data.s) + strlen(right_s) + 1);
-        strcpy(res, left.data.s);
-        strcat(res, right_s);
-        Value v = val_str(res);
-        free(res);
-        free(right_s);
-        return v;
+        if (right.type == VAL_STR) {
+            char* res = malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
+            strcpy(res, left.data.s);
+            strcat(res, right.data.s);
+            Value v = val_str(res);
+            free(res);
+            return v;
+        }
     }
-
+    
     return val_nil();
 }
 
@@ -491,7 +670,7 @@ static Value eval_call(AstNode* node, Environment* env) {
             
             if (func_val.type == VAL_FUNC) {
                 AstNode* decl = func_val.data.func.decl;
-                Environment* call_env = env_new(func_val.data.func.closure);
+                Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
                 env_define(call_env, "self", obj);
                 
                 // Normal argument binding for methods
@@ -502,6 +681,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                 }
                 Value res = eval(decl->data.func_decl.body, call_env);
                 free(full_name);
+                env_free(call_env);
                 if (res.type == VAL_RETURN) return *res.data.return_val;
                 return res;
             }
@@ -599,7 +779,9 @@ static Value eval_call(AstNode* node, Environment* env) {
         if (strcmp(full_name, "__builtin_millis") == 0) {
             struct timeval tv;
             gettimeofday(&tv, NULL);
-            return val_int((int)(tv.tv_sec * 1000 + tv.tv_usec / 1000));
+            double res = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
+            free(full_name);
+            return val_float(res);
         }
         if (strcmp(full_name, "__builtin_delay") == 0) {
             Value ms = eval(node->data.call.args[0], env);
@@ -803,7 +985,7 @@ static Value eval_call(AstNode* node, Environment* env) {
                     }
                     
                     // Call Nira serve function
-                    Environment* call_env = env_new(callback.data.func.closure);
+                    Environment* call_env = env_new(callback.data.func.closure, callback.data.func.decl->data.func_decl.local_count);
                     env_define(call_env, "req", req);
                     Value res = eval(callback.data.func.decl->data.func_decl.body, call_env);
                     if (res.type == VAL_RETURN) res = *res.data.return_val;
@@ -967,7 +1149,19 @@ static Value eval_call(AstNode* node, Environment* env) {
             free(full_name);
             return val_nil();
         }
+    }
+    
+    if (node->data.call.cached_decl) {
+        func_val = val_func(node->data.call.cached_decl, env);
+        // Find the global environment for the closure if it's a top-level func
+        Environment* root = env;
+        while (root->parent) root = root->parent;
+        func_val.data.func.closure = root;
+    } else {
         func_val = env_get(env, full_name);
+        if (func_val.type == VAL_FUNC && !strchr(full_name, '.')) {
+            node->data.call.cached_decl = func_val.data.func.decl;
+        }
     }
 
     if (func_val.type != VAL_FUNC) {
@@ -977,7 +1171,7 @@ static Value eval_call(AstNode* node, Environment* env) {
     }
 
     AstNode* decl = func_val.data.func.decl;
-    Environment* call_env = env_new(func_val.data.func.closure);
+    Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
 
     // Bind arguments
     if (decl->data.func_decl.is_unpacking) {
@@ -994,18 +1188,28 @@ static Value eval_call(AstNode* node, Environment* env) {
                     }
                 }
             }
-            env_define(call_env, key, val);
+            if (call_env->slots && i < call_env->slot_count) {
+                call_env->slots[i] = val;
+            } else {
+                env_define(call_env, key, val);
+            }
         }
     } else {
         for (int i=0; i<node->data.call.arg_count && i<decl->data.func_decl.param_count; i++) {
             Value arg = eval(node->data.call.args[i], env);
             if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-            env_define(call_env, decl->data.func_decl.params[i], arg);
+            
+            if (call_env->slots && i < call_env->slot_count) {
+                call_env->slots[i] = arg;
+            } else {
+                env_define(call_env, decl->data.func_decl.params[i], arg);
+            }
         }
     }
 
     Value result = eval(decl->data.func_decl.body, call_env);
     free(full_name);
+    env_free(call_env); // Return to pool
     if (result.type == VAL_RETURN) return *result.data.return_val;
     return result;
 }
@@ -1013,8 +1217,40 @@ static Value eval_call(AstNode* node, Environment* env) {
 Value eval(AstNode* node, Environment* env) {
     if (!node) return val_nil();
 
+#if defined(__GNUC__) || defined(__clang__)
+    static void* dispatch_table[] = {
+        [AST_PROGRAM] = &&do_program,
+        [AST_FUNC_DECL] = &&do_func_decl,
+        [AST_ASSIGN] = &&do_assign,
+        [AST_VAR_REF] = &&do_var_ref,
+        [AST_LITERAL_INT] = &&do_lit_int,
+        [AST_LITERAL_FLOAT] = &&do_lit_float,
+        [AST_LITERAL_STR] = &&do_lit_str,
+        [AST_LITERAL_BOOL] = &&do_lit_bool,
+        [AST_LITERAL_NULL] = &&do_lit_nil,
+        [AST_BINARY] = &&do_binary,
+        [AST_CALL] = &&do_call,
+        [AST_RETURN] = &&do_return,
+        [AST_IF] = &&do_if,
+        [AST_WHILE] = &&do_while,
+        [AST_BREAK] = &&do_break,
+        [AST_CONTINUE] = &&do_continue,
+        [AST_PASS] = &&do_pass,
+        [AST_ERROR] = &&do_error,
+        [AST_FOR] = &&do_for,
+        [AST_OBJECT] = &&do_obj,
+        [AST_ARRAY] = &&do_arr,
+        [AST_INDEX] = &&do_index,
+    };
+    if (node->type < (sizeof(dispatch_table)/sizeof(void*)) && dispatch_table[node->type]) {
+        goto *dispatch_table[node->type];
+    }
+#endif
+
     switch (node->type) {
-        case AST_PROGRAM: {
+        case AST_PROGRAM:
+        do_program:
+        {
             Value last = val_nil();
             for (int i=0; i<node->data.program.count; i++) {
                 last = eval(node->data.program.statements[i], env);
@@ -1022,17 +1258,22 @@ Value eval(AstNode* node, Environment* env) {
             }
             return last;
         }
-        case AST_FUNC_DECL: {
+        case AST_FUNC_DECL: do_func_decl: {
             Value f = val_func(node, env);
             if (strcmp(node->data.func_decl.name, "anonymous") != 0) {
                 env_define(env, node->data.func_decl.name, f);
             }
             return f;
         }
-        case AST_ASSIGN: {
+        case AST_ASSIGN: do_assign: {
             Value v = eval(node->data.assign.value, env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
             
+            if (node->data.assign.slot != -1 && env->slots) {
+                env->slots[node->data.assign.slot] = v;
+                return v;
+            }
+
             char* target = nr_strdup(node->data.assign.target);
             char* dot = strchr(target, '.');
             if (dot) {
@@ -1065,10 +1306,14 @@ Value eval(AstNode* node, Environment* env) {
             } else {
                 env_assign(env, target, v);
             }
+            free(target);
             return v;
         }
-        case AST_VAR_REF: {
-            char* full_name = nr_strdup(node->data.var_name);
+        case AST_VAR_REF: do_var_ref: {
+            if (node->data.var_ref.slot != -1 && env->slots) {
+                return env->slots[node->data.var_ref.slot];
+            }
+            char* full_name = nr_strdup(node->data.var_ref.name);
             char* dot = strchr(full_name, '.');
             Value v = val_nil();
             if (dot) {
@@ -1076,23 +1321,147 @@ Value eval(AstNode* node, Environment* env) {
                 Value obj = env_get(env, full_name);
                 v = get_dot_value(obj, dot + 1);
             } else {
-                v = env_get(env, full_name);
+                v = env_get_by_hash(env, full_name, node->data.var_ref.hash);
             }
             return v;
         }
-        case AST_LITERAL_INT: return val_int(node->data.int_val);
-        case AST_LITERAL_FLOAT: return val_float(node->data.float_val);
-        case AST_LITERAL_STR: return val_str(node->data.str_val);
-        case AST_LITERAL_BOOL: return val_bool(node->data.int_val);
-        case AST_LITERAL_NULL: return val_nil();
-        case AST_BINARY: return eval_binary(node, env);
-        case AST_CALL: return eval_call(node, env);
-        case AST_RETURN: {
+        case AST_LITERAL_INT:
+        do_lit_int:
+            return val_int(node->data.int_val);
+        case AST_LITERAL_FLOAT:
+        do_lit_float:
+            return val_float(node->data.float_val);
+        case AST_LITERAL_STR:
+        do_lit_str:
+            return val_str(node->data.str_val);
+        case AST_LITERAL_BOOL:
+        do_lit_bool:
+            return val_bool(node->data.int_val);
+        case AST_LITERAL_NULL:
+        do_lit_nil:
+            return val_nil();
+        case AST_BINARY:
+        do_binary:
+        {
+            Value left;
+            AstNode* l_node = node->data.binary.left;
+            if (l_node->type == AST_VAR_REF && l_node->data.var_ref.slot != -1 && env->slots) {
+                left = env->slots[l_node->data.var_ref.slot];
+            } else if (l_node->type == AST_LITERAL_INT) {
+                left = (Value){.type = VAL_INT, .data.i = l_node->data.int_val};
+            } else {
+                left = eval(l_node, env);
+                if (left.type == VAL_RETURN || left.type == VAL_BREAK || left.type == VAL_CONTINUE) return left;
+            }
+            
+            BinOp op = node->data.binary.op;
+            if (op == OP_AND) {
+                if (!is_truthy(left)) return left;
+                return eval(node->data.binary.right, env);
+            }
+            if (op == OP_OR) {
+                if (is_truthy(left)) return left;
+                return eval(node->data.binary.right, env);
+            }
+            if (op == OP_NOT) return val_bool(!is_truthy(left));
+
+            Value right;
+            AstNode* r_node = node->data.binary.right;
+            if (r_node) {
+                if (r_node->type == AST_VAR_REF && r_node->data.var_ref.slot != -1 && env->slots) {
+                    right = env->slots[r_node->data.var_ref.slot];
+                } else if (r_node->type == AST_LITERAL_INT) {
+                    right = (Value){.type = VAL_INT, .data.i = r_node->data.int_val};
+                } else {
+                    right = eval(r_node, env);
+                    if (right.type == VAL_RETURN || right.type == VAL_BREAK || right.type == VAL_CONTINUE) return right;
+                }
+            } else right = val_nil();
+
+            if ((left.type == VAL_INT || left.type == VAL_FLOAT) && (right.type == VAL_INT || right.type == VAL_FLOAT)) {
+                double l = (left.type == VAL_FLOAT) ? left.data.f : (double)left.data.i;
+                double r = (right.type == VAL_FLOAT) ? right.data.f : (double)right.data.i;
+                if (left.type == VAL_FLOAT || right.type == VAL_FLOAT || op == OP_DIV) {
+                    switch (op) {
+                        case OP_ADD: return val_float(l + r);
+                        case OP_SUB: return val_float(l - r);
+                        case OP_MUL: return val_float(l * r);
+                        case OP_DIV: if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero"); return val_float(l / r);
+                        case OP_LT:  return val_bool(l < r);
+                        case OP_GT:  return val_bool(l > r);
+                        case OP_EQ:  return val_bool(l == r);
+                        default: break;
+                    }
+                } else {
+                    int il = (int)l; int ir = (int)r;
+                    switch (op) {
+                        case OP_ADD: return (Value){.type = VAL_INT, .data.i = il + ir};
+                        case OP_SUB: return (Value){.type = VAL_INT, .data.i = il - ir};
+                        case OP_MUL: return (Value){.type = VAL_INT, .data.i = il * ir};
+                        case OP_LT:  return (Value){.type = VAL_BOOL, .data.i = il < ir};
+                        case OP_GT:  return (Value){.type = VAL_BOOL, .data.i = il > ir};
+                        case OP_EQ:  return (Value){.type = VAL_BOOL, .data.i = il == ir};
+                        case OP_NEQ: return (Value){.type = VAL_BOOL, .data.i = il != ir};
+                        case OP_LE:  return (Value){.type = VAL_BOOL, .data.i = il <= ir};
+                        case OP_GE:  return (Value){.type = VAL_BOOL, .data.i = il >= ir};
+                        case OP_DIV: if (ir == 0) report_runtime_error(node, env, "MATH", "Division by zero"); return (Value){.type = VAL_INT, .data.i = il / ir};
+                        default: break;
+                    }
+                }
+            }
+            if (left.type == VAL_STR && op == OP_ADD && right.type == VAL_STR) {
+                char* res = malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
+                strcpy(res, left.data.s); strcat(res, right.data.s);
+                Value v = val_str(res); free(res); return v;
+            }
+            return val_nil();
+        }
+        case AST_CALL:
+        do_call:
+        {
+            if (!node->data.call.name) return val_nil();
+            char* full_name = node->data.call.name; // Don't strdup unless needed
+            Value func_val = val_nil();
+            
+            if (strchr(full_name, '.')) {
+                // Keep the old eval_call logic for dot calls for now to keep eval() readable
+                return eval_call(node, env); 
+            }
+            
+            if (node->data.call.cached_decl) {
+                func_val = val_func(node->data.call.cached_decl, env);
+                Environment* root = env; while (root->parent) root = root->parent;
+                func_val.data.func.closure = root;
+            } else {
+                func_val = env_get(env, full_name);
+                if (func_val.type == VAL_FUNC) node->data.call.cached_decl = func_val.data.func.decl;
+            }
+
+            if (func_val.type != VAL_FUNC) return eval_call(node, env); // Fallback to full eval_call for built-ins
+
+            AstNode* decl = func_val.data.func.decl;
+            Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
+            for (int i=0; i<node->data.call.arg_count && i<decl->data.func_decl.param_count; i++) {
+                Value arg = eval(node->data.call.args[i], env);
+                if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+                if (call_env->slots && i < call_env->slot_count) call_env->slots[i] = arg;
+                else env_define(call_env, decl->data.func_decl.params[i], arg);
+            }
+            Value result = eval(decl->data.func_decl.body, call_env);
+            env_free(call_env);
+            if (result.type == VAL_RETURN) return *result.data.return_val;
+            return result;
+        }
+        case AST_RETURN:
+        do_return:
+        {
             Value v = eval(node->data.ret.value, env);
             if (v.type == VAL_RETURN) return v;
             return val_return(v);
         }
-        case AST_IF: {
+        case AST_IF:
+        do_if:
+        {
             Value cond = eval(node->data.if_stmt.condition, env);
             if (cond.type == VAL_RETURN || cond.type == VAL_BREAK || cond.type == VAL_CONTINUE) return cond;
             if (is_truthy(cond)) {
@@ -1102,7 +1471,9 @@ Value eval(AstNode* node, Environment* env) {
             }
             return val_nil();
         }
-        case AST_WHILE: {
+        case AST_WHILE:
+        do_while:
+        {
             while (1) {
                 Value cond = eval(node->data.while_stmt.condition, env);
                 if (cond.type == VAL_RETURN || cond.type == VAL_BREAK || cond.type == VAL_CONTINUE) return cond;
@@ -1115,15 +1486,25 @@ Value eval(AstNode* node, Environment* env) {
             }
             return val_nil();
         }
-        case AST_BREAK: return (Value){.type = VAL_BREAK};
-        case AST_CONTINUE: return (Value){.type = VAL_CONTINUE};
-        case AST_PASS: return val_nil();
-        case AST_ERROR: {
+        case AST_BREAK:
+        do_break:
+            return (Value){.type = VAL_BREAK};
+        case AST_CONTINUE:
+        do_continue:
+            return (Value){.type = VAL_CONTINUE};
+        case AST_PASS:
+        do_pass:
+            return val_nil();
+        case AST_ERROR:
+        do_error:
+        {
             Value msg = eval(node->data.error_expr.message, env);
             if (msg.type == VAL_RETURN) msg = *msg.data.return_val;
             return val_error(msg.type == VAL_STR ? msg.data.s : "error");
         }
-        case AST_FOR: {
+        case AST_FOR:
+        do_for:
+        {
             Value iter = eval(node->data.for_stmt.iterable, env);
             if (iter.type == VAL_RETURN) iter = *iter.data.return_val;
             if (iter.type != VAL_ARR) report_runtime_error(node, env, "TYPE", "Cannot iterate over non-array");
@@ -1137,7 +1518,9 @@ Value eval(AstNode* node, Environment* env) {
             }
             return val_nil();
         }
-        case AST_OBJECT: {
+        case AST_OBJECT:
+        do_obj:
+        {
             Value obj = val_obj();
             AstField* f = node->data.object.fields;
             while (f) {
@@ -1158,7 +1541,9 @@ Value eval(AstNode* node, Environment* env) {
             }
             return obj;
         }
-        case AST_ARRAY: {
+        case AST_ARRAY:
+        do_arr:
+        {
             Value arr = val_arr();
             for (int i=0; i<node->data.array.count; i++) {
                 if (arr.data.arr->count >= arr.data.arr->capacity) {
@@ -1175,7 +1560,9 @@ Value eval(AstNode* node, Environment* env) {
             }
             return arr;
         }
-        case AST_INDEX: {
+        case AST_INDEX:
+        do_index:
+        {
             Value obj = eval(node->data.index.object, env);
             Value idx = eval(node->data.index.index, env);
             if (obj.type == VAL_RETURN) obj = *obj.data.return_val;
@@ -1273,7 +1660,7 @@ Value eval(AstNode* node, Environment* env) {
             AstNode* imported_program = parse_program(&p);
             Environment* root = env;
             while (root->parent) root = root->parent;
-            Environment* import_env = env_new(root);
+            Environment* import_env = env_new(root, 0);
             import_env->source = source;
             import_env->filename = nr_strdup(full_path);
             eval(imported_program, import_env);
@@ -1284,20 +1671,21 @@ Value eval(AstNode* node, Environment* env) {
             }
             if (final_name) {
                 Value mod_obj = val_obj();
-                Variable* v = import_env->vars;
-                while (v) {
-                    if (mod_obj.data.obj->count >= mod_obj.data.obj->capacity) {
-                        int old_cap = mod_obj.data.obj->capacity;
-                        mod_obj.data.obj->capacity *= 2;
-                        mod_obj.data.obj->keys = nr_realloc(mod_obj.data.obj->keys, sizeof(char*) * old_cap, sizeof(char*) * mod_obj.data.obj->capacity);
-                        mod_obj.data.obj->values = nr_realloc(mod_obj.data.obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * mod_obj.data.obj->capacity);
+                for (int i = 0; i < import_env->capacity; i++) {
+                    Variable* v = import_env->table[i];
+                    while (v) {
+                        if (mod_obj.data.obj->count >= mod_obj.data.obj->capacity) {
+                            int old_cap = mod_obj.data.obj->capacity;
+                            mod_obj.data.obj->capacity *= 2;
+                            mod_obj.data.obj->keys = nr_realloc(mod_obj.data.obj->keys, sizeof(char*) * old_cap, sizeof(char*) * mod_obj.data.obj->capacity);
+                            mod_obj.data.obj->values = nr_realloc(mod_obj.data.obj->values, sizeof(Value*) * old_cap, sizeof(Value*) * mod_obj.data.obj->capacity);
+                        }
+                        mod_obj.data.obj->keys[mod_obj.data.obj->count] = nr_strdup(v->name);
+                        mod_obj.data.obj->values[mod_obj.data.obj->count] = nr_malloc(sizeof(Value));
+                        *mod_obj.data.obj->values[mod_obj.data.obj->count] = v->value;
+                        mod_obj.data.obj->count++;
+                        v = v->next;
                     }
-                    mod_obj.data.obj->keys[mod_obj.data.obj->count] = nr_strdup(v->name);
-                    mod_obj.data.obj->values[mod_obj.data.obj->count] = nr_malloc(sizeof(Value));
-
-                    *mod_obj.data.obj->values[mod_obj.data.obj->count] = v->value;
-                    mod_obj.data.obj->count++;
-                    v = v->next;
                 }
                 env_define(env, final_name, mod_obj);
             } else if (node->data.import_stmt.symbol_count > 0) {
@@ -1306,10 +1694,12 @@ Value eval(AstNode* node, Environment* env) {
                     env_define(env, node->data.import_stmt.symbols[i], v);
                 }
             } else {
-                Variable* v = import_env->vars;
-                while (v) {
-                    env_define(env, v->name, v->value);
-                    v = v->next;
+                for (int i = 0; i < import_env->capacity; i++) {
+                    Variable* v = import_env->table[i];
+                    while (v) {
+                        env_define(env, v->name, v->value);
+                        v = v->next;
+                    }
                 }
             }
             return val_nil();

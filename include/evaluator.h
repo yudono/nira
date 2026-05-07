@@ -54,8 +54,14 @@ typedef struct Variable {
 } Variable;
 
 typedef struct Environment {
-    Variable* vars;
     struct Environment* parent;
+    Variable** table;
+    Variable* fast_table[4]; // [NEW] Small fixed-size array for fast access
+    int capacity;
+    int count;
+    Value* slots;     // [NEW] Fixed-size array for parameters/locals
+    int slot_count;   // [NEW]
+    int slots_capacity; // [NEW] Track capacity for reuse
     const char* source;
     const char* filename;
 } Environment;
@@ -72,12 +78,13 @@ Value val_bool(int b);
 Value val_error(char* msg);
 void val_free(Value v);
 
-Environment* env_new(Environment* parent);
+Environment* env_new(Environment* parent, int slot_count);
 void env_define(Environment* env, char* name, Value val);
 void env_assign(Environment* env, char* name, Value val);
 Value env_get(Environment* env, char* name);
 void env_free(Environment* env);
 
+void nr_resolve(AstNode* program);
 Value eval(AstNode* node, Environment* env);
 
 // FFI Compatibility Functions

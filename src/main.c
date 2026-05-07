@@ -261,7 +261,8 @@ int main(int argc, char *argv[]) {
   }
 
   if (is_run) {
-    Environment *child_env = env_new(NULL);
+    nr_resolve(program);
+    Environment *child_env = env_new(NULL, 0);
     child_env->source = source;
     child_env->filename = filename;
     nr_eval_add_include_path(".");
@@ -378,7 +379,7 @@ void dump_ast(AstNode *node, int indent) {
     dump_ast(node->data.assign.value, indent + 1);
     break;
   case AST_VAR_REF:
-    printf("VarRef: %s\n", node->data.var_name);
+    printf("VarRef: %s\n", node->data.var_ref.name);
     break;
   case AST_LITERAL_INT:
     printf("LiteralInt: %d\n", node->data.int_val);
@@ -405,7 +406,7 @@ void dump_ast(AstNode *node, int indent) {
     }
     break;
   case AST_BINARY:
-    printf("Binary: %s\n", node->data.binary.op);
+    printf("Binary: %u\n", (unsigned int)node->data.binary.op);
     dump_ast(node->data.binary.left, indent + 1);
     dump_ast(node->data.binary.right, indent + 1);
     break;

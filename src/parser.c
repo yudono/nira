@@ -98,6 +98,32 @@ static char* strip_quotes(Token t) {
     return result;
 }
 
+static unsigned int hash_key(const char* key) {
+    unsigned int hash = 5381;
+    int c;
+    while ((c = *key++)) hash = ((hash << 5) + hash) + c;
+    return hash;
+}
+
+static BinOp string_to_binop(const char* op) {
+    if (strcmp(op, "+") == 0) return OP_ADD;
+    if (strcmp(op, "-") == 0) return OP_SUB;
+    if (strcmp(op, "*") == 0) return OP_MUL;
+    if (strcmp(op, "/") == 0) return OP_DIV;
+    if (strcmp(op, "%") == 0) return OP_MOD;
+    if (strcmp(op, "**") == 0) return OP_POW;
+    if (strcmp(op, "==") == 0) return OP_EQ;
+    if (strcmp(op, "!=") == 0) return OP_NEQ;
+    if (strcmp(op, "<") == 0) return OP_LT;
+    if (strcmp(op, ">") == 0) return OP_GT;
+    if (strcmp(op, "<=") == 0) return OP_LE;
+    if (strcmp(op, ">=") == 0) return OP_GE;
+    if (strcmp(op, "and") == 0) return OP_AND;
+    if (strcmp(op, "or") == 0) return OP_OR;
+    if (strcmp(op, "not") == 0) return OP_NOT;
+    return OP_UNKNOWN;
+}
+
 void parser_init(Parser* p, Lexer* l, const char* filename) {
     p->lexer = l;
     p->had_error = 0;
@@ -141,7 +167,7 @@ static AstNode* parse_object(Parser* p) {
             value = parse_expression(p);
         } else {
             value = ast_new(AST_VAR_REF, p->previous);
-            value->data.var_name = strdup(name);
+            value->data.var_ref.name = strdup(name);
         }
 
         AstField* field = nr_malloc(sizeof(AstField));
@@ -283,7 +309,7 @@ static AstNode* parse_primary(Parser* p) {
                 if (args[i]->type != AST_VAR_REF) {
                     report_error(p, p->previous, "Lambda parameters must be identifiers");
                 } else {
-                    params[i] = strdup(args[i]->data.var_name);
+                    params[i] = strdup(args[i]->data.var_ref.name);
                 }
             }
             AstNode* lambda = ast_new(AST_FUNC_DECL, p->current);
@@ -301,17 +327,19 @@ static AstNode* parse_primary(Parser* p) {
     }
     if (match(p, TOKEN_IDENT)) {
         AstNode* node = ast_new(AST_VAR_REF, p->current);
-        node->data.var_name = copy_token_text(p->previous);
+        node->data.var_ref.name = copy_token_text(p->previous);
+        node->data.var_ref.hash = hash_key(node->data.var_ref.name);
         
         while (1) {
             if (match(p, TOKEN_DOT)) {
                 consume(p, TOKEN_IDENT, "Expect identifier after '.'");
                 if (node->type == AST_VAR_REF) {
-                    int old_len = strlen(node->data.var_name);
+                    int old_len = strlen(node->data.var_ref.name);
                     int add_len = p->previous.length + 1;
-                    node->data.var_name = realloc(node->data.var_name, old_len + add_len + 1);
-                    strcat(node->data.var_name, ".");
-                    strncat(node->data.var_name, p->previous.text, p->previous.length);
+                    node->data.var_ref.name = realloc(node->data.var_ref.name, old_len + add_len + 1);
+                    strcat(node->data.var_ref.name, ".");
+                    strncat(node->data.var_ref.name, p->previous.text, p->previous.length);
+                    node->data.var_ref.hash = hash_key(node->data.var_ref.name);
                 } else {
                     // It's an AST_INDEX followed by a DOT. We can treat it as another AST_INDEX where index is a string literal!
                     AstNode* index_node = ast_new(AST_INDEX, p->current);
@@ -335,7 +363,7 @@ static AstNode* parse_primary(Parser* p) {
 
         if (match(p, TOKEN_ARROW)) {
             char** params = malloc(sizeof(char*));
-            params[0] = node->data.var_name;
+            params[0] = node->data.var_ref.name;
             AstNode* lambda = ast_new(AST_FUNC_DECL, p->current);
             lambda->data.func_decl.name = strdup("anonymous");
             lambda->data.func_decl.params = params;
@@ -347,7 +375,7 @@ static AstNode* parse_primary(Parser* p) {
         if (match(p, TOKEN_LPAREN)) {
             AstNode* call = ast_new(AST_CALL, p->current);
             if (node->type == AST_VAR_REF) {
-                call->data.call.name = node->data.var_name;
+                call->data.call.name = node->data.var_ref.name;
             } else {
                 call->data.call.name = strdup("anonymous"); // Or handle function pointers later
             }
@@ -377,7 +405,7 @@ static AstNode* parse_primary(Parser* p) {
                     if (args[i]->type != AST_VAR_REF) {
                         report_error(p, p->previous, "Lambda parameters must be identifiers");
                     } else {
-                        params[i] = strdup(args[i]->data.var_name);
+                        params[i] = strdup(args[i]->data.var_ref.name);
                     }
                 }
                 AstNode* lambda = ast_new(AST_FUNC_DECL, p->current);
@@ -401,14 +429,14 @@ static AstNode* parse_primary(Parser* p) {
 static AstNode* parse_unary(Parser* p) {
     if (match(p, TOKEN_KEYWORD_NOT)) {
         AstNode* node = ast_new(AST_BINARY, p->current);
-        node->data.binary.op = strdup("not");
+        node->data.binary.op = OP_NOT;
         node->data.binary.left = parse_unary(p);
         node->data.binary.right = NULL;
         return node;
     }
     if (match(p, TOKEN_OP_MINUS)) {
         AstNode* node = ast_new(AST_BINARY, p->current);
-        node->data.binary.op = strdup("-");
+        node->data.binary.op = OP_SUB;
         AstNode* zero = ast_new(AST_LITERAL_INT, p->current);
         zero->data.int_val = 0;
         node->data.binary.left = zero;
@@ -422,11 +450,10 @@ static AstNode* parse_power(Parser* p) {
     AstNode* expr = parse_unary(p);
     // Right-associative: use recursion instead of while loop
     if (match(p, TOKEN_OP_POW)) {
-        char* op = copy_token_text(p->previous);
         AstNode* right = parse_power(p); // recurse for right-associativity
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
-        binary->data.binary.op = op;
+        binary->data.binary.op = OP_POW;
         binary->data.binary.right = right;
         expr = binary;
     }
@@ -436,7 +463,7 @@ static AstNode* parse_power(Parser* p) {
 static AstNode* parse_multiplication(Parser* p) {
     AstNode* expr = parse_power(p);
     while (match(p, TOKEN_OP_MUL) || match(p, TOKEN_OP_DIV) || match(p, TOKEN_OP_MOD)) {
-        char* op = copy_token_text(p->previous);
+        BinOp op = string_to_binop(copy_token_text(p->previous));
         AstNode* right = parse_power(p);
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
@@ -450,7 +477,7 @@ static AstNode* parse_multiplication(Parser* p) {
 static AstNode* parse_addition(Parser* p) {
     AstNode* expr = parse_multiplication(p);
     while (match(p, TOKEN_OP_PLUS) || match(p, TOKEN_OP_MINUS)) {
-        char* op = copy_token_text(p->previous);
+        BinOp op = string_to_binop(copy_token_text(p->previous));
         AstNode* right = parse_multiplication(p);
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
@@ -464,7 +491,7 @@ static AstNode* parse_addition(Parser* p) {
 static AstNode* parse_comparison(Parser* p) {
     AstNode* expr = parse_addition(p);
     while (match(p, TOKEN_OP_LT) || match(p, TOKEN_OP_GT) || match(p, TOKEN_OP_LE) || match(p, TOKEN_OP_GE)) {
-        char* op = copy_token_text(p->previous);
+        BinOp op = string_to_binop(copy_token_text(p->previous));
         AstNode* right = parse_addition(p);
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
@@ -478,7 +505,7 @@ static AstNode* parse_comparison(Parser* p) {
 static AstNode* parse_equality(Parser* p) {
     AstNode* expr = parse_comparison(p);
     while (match(p, TOKEN_OP_EQ) || match(p, TOKEN_OP_NEQ)) {
-        char* op = copy_token_text(p->previous);
+        BinOp op = string_to_binop(copy_token_text(p->previous));
         AstNode* right = parse_comparison(p);
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
@@ -492,7 +519,7 @@ static AstNode* parse_equality(Parser* p) {
 static AstNode* parse_logical(Parser* p) {
     AstNode* expr = parse_equality(p);
     while (match(p, TOKEN_KEYWORD_AND) || match(p, TOKEN_KEYWORD_OR)) {
-        char* op = copy_token_text(p->previous);
+        BinOp op = string_to_binop(copy_token_text(p->previous));
         AstNode* right = parse_equality(p);
         AstNode* binary = ast_new(AST_BINARY, p->current);
         binary->data.binary.left = expr;
@@ -794,8 +821,9 @@ static AstNode* parse_statement(Parser* p) {
             node->data.func_decl.is_unpacking = 0;
             
             int capacity = 8;
-            int count = 0;
             char** params = nr_malloc(sizeof(char*) * capacity);
+            char** param_types = nr_malloc(sizeof(char*) * capacity);
+            int count = 0;
             
             if (check(p, TOKEN_LPAREN)) {
                 report_error(p, p->current, "Function declarations should not use parentheses. Use 'name param1 param2:' instead.");
@@ -809,13 +837,32 @@ static AstNode* parse_statement(Parser* p) {
                     int old_cap = capacity;
                     capacity *= 2;
                     params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                    param_types = nr_realloc(param_types, sizeof(char*) * old_cap, sizeof(char*) * capacity);
                 }
-                params[count++] = copy_token_text(p->previous);
+                params[count] = copy_token_text(p->previous);
+                param_types[count] = NULL;
+                
+                // Only treat ':' as a type if it's followed by an identifier
+                // and NOT at the end of the signature
+                if (check(p, TOKEN_COLON) && lexer_peek_n(p->lexer, 1) == TOKEN_IDENT) {
+                    advance(p); // consume ':'
+                    advance(p); // consume IDENT
+                    param_types[count] = copy_token_text(p->previous);
+                }
+                
+                count++;
                 if (match(p, TOKEN_COMMA)) {}
             }
             
             node->data.func_decl.params = params;
+            node->data.func_decl.param_types = param_types;
             node->data.func_decl.param_count = count;
+            node->data.func_decl.return_type = NULL;
+            
+            if (match(p, TOKEN_ARROW)) {
+                consume(p, TOKEN_IDENT, "Expect return type after '->'");
+                node->data.func_decl.return_type = copy_token_text(p->previous);
+            }
             
             consume(p, TOKEN_COLON, "Expect ':' after function signature");
             while (match(p, TOKEN_NEWLINE)) ; 
@@ -830,7 +877,7 @@ static AstNode* parse_statement(Parser* p) {
     if (match(p, TOKEN_EQUALS)) {
         if (expr->type == AST_VAR_REF) {
             AstNode* assign = ast_new(AST_ASSIGN, p->current);
-            assign->data.assign.target = expr->data.var_name;
+            assign->data.assign.target = expr->data.var_ref.name;
             assign->data.assign.value = parse_expression(p);
             return assign;
         } else if (expr->type == AST_INDEX) {

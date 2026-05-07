@@ -4,6 +4,12 @@
 #include <stdlib.h>
 
 typedef enum {
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, OP_POW,
+    OP_EQ, OP_NEQ, OP_LT, OP_GT, OP_LE, OP_GE,
+    OP_AND, OP_OR, OP_NOT, OP_UNKNOWN
+} BinOp;
+
+typedef enum {
     AST_PROGRAM,
     AST_FUNC_DECL,
     AST_ASSIGN,
@@ -58,8 +64,11 @@ typedef struct AstNode {
         struct {
             char* name;
             char** params;
+            char** param_types;
             int param_count;
             struct AstNode* body;
+            char* return_type;
+            int local_count; // [NEW]
             int is_exported;
             int is_unpacking;
         } func_decl;
@@ -68,10 +77,15 @@ typedef struct AstNode {
         struct {
             char* target;
             struct AstNode* value;
+            int slot; // [NEW]
         } assign;
 
         // Variable Reference
-        char* var_name;
+        struct {
+            char* name;
+            unsigned int hash;
+            int slot; // [NEW] -1 if not slotted
+        } var_ref;
 
         // Literals
         int int_val;
@@ -88,12 +102,13 @@ typedef struct AstNode {
             char* name;
             struct AstNode** args;
             int arg_count;
+            struct AstNode* cached_decl; // [NEW] Pointer to the resolved function
         } call;
 
         // Binary
         struct {
             struct AstNode* left;
-            char* op;
+            BinOp op;
             struct AstNode* right;
         } binary;
 

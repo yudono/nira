@@ -110,14 +110,13 @@ static void print_runtime(FILE *out) {
           "count; int capacity; }* arr; void* func_ptr; } data; } Value;\n\n");
   fprintf(
       out,
-      "Value val_nil() { return (Value){.type = VAL_NIL}; }\nValue val_int(int "
-      "i) { return (Value){.type = VAL_INT, .data.i = i}; }\nValue "
-      "val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; "
-      "}\nValue val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = "
-      "b ? 1 : 0}; }\nValue val_str(const char* s) { return (Value){.type = "
-      "VAL_STR, .data.s = nr_strdup(s)}; }\nValue val_error(const char* m) { "
-      "return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }\nValue "
-      "val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = "
+      "static inline Value val_nil() { return (Value){.type = VAL_NIL}; }\n"
+      "static inline Value val_int(int i) { return (Value){.type = VAL_INT, .data.i = i}; }\n"
+      "static inline Value val_float(double f) { return (Value){.type = VAL_FLOAT, .data.f = f}; }\n"
+      "static inline Value val_bool(bool b) { return (Value){.type = VAL_BOOL, .data.i = b ? 1 : 0}; }\n"
+      "Value val_str(const char* s) { return (Value){.type = VAL_STR, .data.s = nr_strdup(s)}; }\n"
+      "Value val_error(const char* m) { return (Value){.type = VAL_ERROR, .data.s = nr_strdup(m)}; }\n"
+      "Value val_func(void* ptr) { return (Value){.type = VAL_FUNC, .data.func_ptr = "
       "ptr}; }\nbool is_truthy(Value v) { if (v.type == VAL_NIL) return false; "
       "if (v.type == VAL_BOOL || v.type == VAL_INT) return v.data.i != 0; if "
       "(v.type == VAL_FLOAT) return v.data.f != 0.0; return true; }\n\n");
@@ -981,25 +980,25 @@ void codegen_c_node(AstNode *node, FILE *out) {
     fprintf(out, "_tmp; })");
     break;
   }
-  case AST_VAR_REF:
-    if (strcmp(node->data.var_name, "null") == 0)
+  case AST_VAR_REF: {
+    const char* name = node->data.var_ref.name;
+    if (strcmp(name, "null") == 0)
       fprintf(out, "val_nil()");
-    else if (strcmp(node->data.var_name, "true") == 0)
+    else if (strcmp(name, "true") == 0)
       fprintf(out, "val_bool(true)");
-    else if (strcmp(node->data.var_name, "false") == 0)
+    else if (strcmp(name, "false") == 0)
       fprintf(out, "val_bool(false)");
-    else if (strcmp(node->data.var_name, "self") == 0)
+    else if (strcmp(name, "self") == 0)
       fprintf(out, "self");
-    else if (strchr(node->data.var_name, '.')) {
-      char *n = strdup(node->data.var_name);
+    else if (strchr(name, '.')) {
+      char *n = strdup(name);
       char *dot = strchr(n, '.');
       *dot = '\0';
-
       char *remaining = dot + 1;
       char *next_dot = strchr(remaining, '.');
 
       if (!next_dot) {
-        fprintf(out, "get_field(nr_v_%s, \"%s\")", n, remaining);
+          fprintf(out, "get_field(nr_v_%s, \"%s\")", n, remaining);
       } else {
         char *parts[16];
         int part_count = 0;
@@ -1019,24 +1018,25 @@ void codegen_c_node(AstNode *node, FILE *out) {
           fprintf(out, ", \"%s\")", parts[i]);
       }
       free(n);
-    } else if (is_function(node->data.var_name))
-      fprintf(out, "val_func(nr_%s)", node->data.var_name);
+    } else if (is_function(name))
+      fprintf(out, "val_func(nr_%s)", name);
     else {
       char p[256];
       if (current_pref) {
-        sprintf(p, "%s_%s", current_pref, node->data.var_name);
+        sprintf(p, "%s_%s", current_pref, name);
         if (is_function(p)) {
           fprintf(out, "val_func(nr_%s)", p);
-          goto end;
         } else if (is_global(p)) {
           fprintf(out, "nr_v_%s", p);
-          goto end;
+        } else {
+          fprintf(out, "nr_v_%s", name);
         }
+      } else {
+        fprintf(out, "nr_v_%s", name);
       }
-      fprintf(out, "nr_v_%s", node->data.var_name);
     }
-  end:
     break;
+  }
   case AST_LITERAL_INT:
     fprintf(out, "val_int(%d)", node->data.int_val);
     break;
@@ -1430,56 +1430,68 @@ void codegen_c_node(AstNode *node, FILE *out) {
     break;
   }
   case AST_BINARY: {
-    if (strcmp(node->data.binary.op, "==") == 0) {
+    BinOp op = node->data.binary.op;
+    if (op == OP_EQ) {
       fprintf(out, "nr_rt_eq(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ", ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ")");
-    } else if (strcmp(node->data.binary.op, "!=") == 0) {
+    } else if (op == OP_NEQ) {
       fprintf(out, "val_bool(!is_truthy(nr_rt_eq(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ", ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ")))");
-    } else if (strcmp(node->data.binary.op, "+") == 0) {
+    } else if (op == OP_ADD) {
       fprintf(out, "nr_rt_add(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ", ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ")");
-    } else if (strcmp(node->data.binary.op, "and") == 0) {
+    } else if (op == OP_AND) {
       fprintf(out, "({ Value _l = ");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, "; is_truthy(_l) ? ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, " : _l; })");
-    } else if (strcmp(node->data.binary.op, "or") == 0) {
+    } else if (op == OP_OR) {
       fprintf(out, "({ Value _l = ");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, "; is_truthy(_l) ? _l : ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, "; })");
-    } else if (strcmp(node->data.binary.op, "not") == 0) {
+    } else if (op == OP_NOT) {
       fprintf(out, "val_bool(!is_truthy(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, "))");
-    } else if (strcmp(node->data.binary.op, "%") == 0) {
+    } else if (op == OP_MOD) {
       fprintf(out, "val_int(");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ".data.i %% ");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ".data.i)");
-    } else if (strcmp(node->data.binary.op, "**") == 0) {
+    } else if (op == OP_POW) {
       fprintf(out, "val_int((int)pow((double)");
       codegen_c_node(node->data.binary.left, out);
       fprintf(out, ".data.i, (double)");
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ".data.i))");
     } else {
+      const char* op_str = "";
+      switch(op) {
+        case OP_SUB: op_str = "-"; break;
+        case OP_MUL: op_str = "*"; break;
+        case OP_DIV: op_str = "/"; break;
+        case OP_LT:  op_str = "<"; break;
+        case OP_GT:  op_str = ">"; break;
+        case OP_LE:  op_str = "<="; break;
+        case OP_GE:  op_str = ">="; break;
+        default: break;
+      }
       fprintf(out, "val_int(");
       codegen_c_node(node->data.binary.left, out);
-      fprintf(out, ".data.i %s ", node->data.binary.op);
+      fprintf(out, ".data.i %s ", op_str);
       codegen_c_node(node->data.binary.right, out);
       fprintf(out, ".data.i)");
     }
