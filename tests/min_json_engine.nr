@@ -60,7 +60,7 @@ format_object obj, indent:
   
   return res + indent + "}"
 
-main:
+main():
   print("=== MINI JSON ENGINE TEST ===")
   
   complex_data = {

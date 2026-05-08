@@ -6,7 +6,7 @@
 
 from file import write, read, remove, exists, append
 
-export main:
+export main():
   print("=== STRESS: I/O Stability ===")
 
   # --- Basic file round-trip ---

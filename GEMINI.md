@@ -47,11 +47,17 @@ Nira menggabungkan filosofi:
 ## 🔹 Function Definition
 
 ```nira
-createUser data:
+createUser(data, role="user"):
   return {
     id: data.id
     name: data.name
+    role: role
   }
+
+# Variadic function
+log(...messages):
+  for msg in messages:
+    print(msg)
 ```
 
 ---
@@ -73,7 +79,7 @@ user = {
 createUser({
   id: 1,
   name: "Budi"
-})
+}, role="admin")
 ```
 
 ---

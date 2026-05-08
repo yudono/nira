@@ -2,12 +2,12 @@
 from file import write, read, remove
 from sys import run
 
-greet data:
+greet(data):
   print("Hello " + data.name)
   print("Age " + data.age)
   return 0
 
-export main:
+export main():
   greet({ name: "Budi", age: "25" })
   
   # Write to file

@@ -4,7 +4,7 @@ import "sys"
 
 args = sys.args()
 
-main:
+main():
   if len(args) > 1:
     cli.run(args)
   else:

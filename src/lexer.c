@@ -218,7 +218,13 @@ Token lexer_next_token(Lexer* l) {
                 return make_token(l, TOKEN_OP_NEQ, 2);
             }
             break; // Unexpected character '!' handled below
-        case '.': return make_token(l, TOKEN_DOT, 1);
+        case '.':
+            if (peek(l) == '.' && peek_n(l, 1) == '.') {
+                advance(l);
+                advance(l);
+                return make_token(l, TOKEN_DOT_DOT_DOT, 3);
+            }
+            return make_token(l, TOKEN_DOT, 1);
         case '{': return make_token(l, TOKEN_LBRACE, 1);
         case '}': return make_token(l, TOKEN_RBRACE, 1);
         case '(': return make_token(l, TOKEN_LPAREN, 1);

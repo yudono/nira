@@ -1,6 +1,6 @@
 from time import millis
 
-main:
+main():
     start = millis()
     sum = 0
     i = 0

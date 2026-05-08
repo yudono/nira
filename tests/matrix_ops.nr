@@ -1,7 +1,7 @@
 # Matrix Operations Test
 # Tests nested arrays and loops.
 
-create_matrix rows, cols, initial:
+create_matrix(rows, cols, initial):
   m = []
   i = 0
   while i < rows:
@@ -14,7 +14,7 @@ create_matrix rows, cols, initial:
     i = i + 1
   return m
 
-multiply a, b:
+multiply(a, b):
   rows_a = len(a)
   cols_a = len(a[0])
   rows_b = len(b)
@@ -44,14 +44,14 @@ multiply a, b:
   
   return result
 
-print_matrix m:
+print_matrix(m):
   for row in m:
     line = ""
     for val in row:
       line = line + toString(val) + " "
     print(line)
 
-main:
+main():
   print("=== MATRIX MULTIPLICATION TEST ===")
   
   # 2x3 Matrix

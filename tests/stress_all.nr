@@ -19,7 +19,7 @@ import "stress_io"
 import "stress_closures"
 import "stress_strings"
 
-main:
+main():
   print("╔══════════════════════════════════════╗")
   print("║   NIRA COMPREHENSIVE STRESS SUITE    ║")
   print("╚══════════════════════════════════════╝")

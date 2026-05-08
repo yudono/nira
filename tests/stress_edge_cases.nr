@@ -4,7 +4,7 @@
 # Tests division by zero, empty collections,
 # null handling, unicode strings, and type coercion.
 
-export main:
+export main():
   print("=== STRESS: Edge Cases ===")
 
   # --- Division by zero ---

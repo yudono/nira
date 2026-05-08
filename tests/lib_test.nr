@@ -5,7 +5,7 @@ import collection
 import json
 import time
 
-main:
+main():
   # Test conv
   val = "123"
   num = conv.toInt(val)

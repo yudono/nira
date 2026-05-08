@@ -1,6 +1,6 @@
 from time import millis
 
-main:
+main():
     arr = []
     i = 0
     while i < 5000:

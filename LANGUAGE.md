@@ -25,15 +25,46 @@ make
 
 ## 🧩 Syntax Reference
 
-### Function Definition
-Functions are defined using `name params:`.
+## Functions
+
+Nira supports modern function declarations with parentheses.
+
 ```nira
-add a b:
+# Standard function
+add(a, b):
   return a + b
 
-main:
-  result = add(5, 10)
-  print(result)
+# Function with optional parameters
+greet(name, greeting="Hello"):
+  return greeting + " " + name
+
+# Variadic function (collects extra arguments into an array)
+sum(...nums):
+  total = 0
+  for n in nums:
+    total = total + n
+  return total
+```
+
+### Function Calls
+
+Functions can be called with positional or named arguments.
+
+```nira
+# Positional
+greet("Budi", "Hi")
+
+# Named (can be out of order)
+greet(greeting="Halo", name="Agus")
+
+# Mixed
+greet("Siti", greeting="Assalamu'alaikum")
+```
+
+### Command Style (Legacy)
+Nira still supports command-style calls for simple functions, though parentheses are recommended for clarity.
+```nira
+println "Hello World"
 ```
 
 ### Variable Assignment

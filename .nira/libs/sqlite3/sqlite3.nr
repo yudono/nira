@@ -1,4 +1,4 @@
-native:
+native():
   link "-lsqlite3"
   header "<sqlite3.h>"
   code: "
@@ -41,11 +41,11 @@ native:
     }
   "
 
-open path:
+open(path):
   return __native_sqlite3_open(path)
 
-exec db, sql, params:
+exec(db, sql, params):
   return __native_sqlite3_exec(db, sql, params or [])
 
-query db, sql, params:
+query(db, sql, params):
   return __native_sqlite3_query(db, sql, params or [])

@@ -6,7 +6,7 @@
 
 # --- Ackermann Function ---
 # Grows extremely fast, stresses the call stack
-ackermann m, n:
+ackermann(m, n):
   if m == 0:
     return n + 1
   if n == 0:
@@ -14,29 +14,29 @@ ackermann m, n:
   return ackermann(m - 1, ackermann(m, n - 1))
 
 # --- Deep linear recursion ---
-count_down n:
+count_down(n):
   if n <= 0:
     return 0
   return count_down(n - 1)
 
 # --- Recursive sum ---
-recursive_sum n:
+recursive_sum(n):
   if n <= 0:
     return 0
   return n + recursive_sum(n - 1)
 
 # --- Mutual recursion ---
-is_even n:
+is_even(n):
   if n == 0:
     return true
   return is_odd(n - 1)
 
-is_odd n:
+is_odd(n):
   if n == 0:
     return false
   return is_even(n - 1)
 
-export main:
+export main():
   print("=== STRESS: Recursion & Memory ===")
 
   # Ackermann (small values - it grows FAST)

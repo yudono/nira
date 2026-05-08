@@ -1,4 +1,4 @@
-main:
+main():
   print("Testing Arena Allocator...")
   a = { x: 10, y: 20 }
   print(a.x)

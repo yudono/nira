@@ -7,7 +7,7 @@
 import "object"
 
 # --- Bubble Sort ---
-bubble_sort items:
+bubble_sort(items):
   n = len(items)
   i = 0
   while i < n:
@@ -22,7 +22,7 @@ bubble_sort items:
   return items
 
 # --- Linear search ---
-linear_search items, target:
+linear_search(items, target):
   i = 0
   while i < len(items):
     if items[i] == target:
@@ -31,7 +31,7 @@ linear_search items, target:
   return -1
 
 # --- Reverse array ---
-reverse_arr items:
+reverse_arr(items):
   result = []
   i = len(items) - 1
   while i >= 0:
@@ -40,7 +40,7 @@ reverse_arr items:
   return result
 
 # --- Array contains ---
-contains items, target:
+contains(items, target):
   i = 0
   while i < len(items):
     if items[i] == target:
@@ -48,7 +48,7 @@ contains items, target:
     i = i + 1
   return false
 
-export main:
+export main():
   print("=== STRESS: Data Structures ===")
 
   # --- Sorting stress ---

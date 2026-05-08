@@ -1,7 +1,7 @@
 # Hierarchical structure test
 # This test simulates a company organization structure with departments and employees.
 
-create_employee id, name, role:
+create_employee(id, name, role):
   return {
     id: id,
     name: name,
@@ -9,23 +9,23 @@ create_employee id, name, role:
     projects: []
   }
 
-create_department name:
+create_department(name):
   return {
     name: name,
     employees: [],
     sub_departments: []
   }
 
-add_employee dept, emp:
+add_employee(dept, emp):
   emps = dept.employees
   emps.push(emp)
 
-add_sub_dept dept, sub:
+add_sub_dept(dept, sub):
   subs = dept.sub_departments
   subs.push(sub)
 
 # Recursive function to print organization
-print_org dept, indent:
+print_org(dept, indent):
   print(indent + "Department: " + toString(dept.name))
   for emp in dept.employees:
     print(indent + "  - Employee: " + toString(emp.name) + " (" + toString(emp.role) + ")")
@@ -33,7 +33,7 @@ print_org dept, indent:
   for sub in dept.sub_departments:
     print_org(sub, indent + "    ")
 
-main:
+main():
   print("=== COMPANY ORG TEST ===")
   
   head_office = create_department("Head Office")

@@ -1,18 +1,18 @@
 # String library for Nira
 
-indexOf s sub:
+indexOf(s, sub):
   return __builtin_str_index_of(s, sub)
 
-replace s old new_str:
+replace(s, old, new_str):
   return __builtin_str_replace(s, old, new_str)
 
-match s regex:
+match(s, regex):
   return __builtin_str_match(s, regex)
 
-contains s sub:
+contains(s, sub):
   return indexOf(s, sub) != -1
 
-split s sep:
+split(s, sep):
   res = []
   curr = s
   idx = indexOf(curr, sep)
@@ -24,7 +24,7 @@ split s sep:
   res.push(curr)
   return res
 
-trim s:
+trim(s):
   # Simple trim (leading/trailing spaces)
   res = s
   while len(res) > 0 and res.substring(0, 1) == " ":
@@ -33,8 +33,8 @@ trim s:
     res = res.substring(0, len(res) - 1)
   return res
 
-upper s:
+upper(s):
   return s
 
-lower s:
+lower(s):
   return s

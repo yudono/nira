@@ -1,14 +1,14 @@
 # Minimal Binary Search Tree (BST) Implementation
 # Tests recursion with nested objects.
 
-create_node val:
+create_node(val):
   return {
     val: val,
     left: null,
     right: null
   }
 
-insert root, val:
+insert(root, val):
   if root == null:
     return create_node(val)
   
@@ -19,7 +19,7 @@ insert root, val:
   
   return root
 
-search root, val:
+search(root, val):
   if root == null:
     return false
   if root.val == val:
@@ -30,7 +30,7 @@ search root, val:
   else:
     return search(root.right, val)
 
-inorder root:
+inorder(root):
   if root == null:
     return
   
@@ -38,7 +38,7 @@ inorder root:
   print("Node: " + toString(root.val))
   inorder(root.right)
 
-main:
+main():
   print("=== MIN BST TEST ===")
   
   root = null

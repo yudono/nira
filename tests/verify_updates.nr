@@ -1,6 +1,6 @@
 import "object"
 
-main:
+main():
   user = { name: "Budi", age: 25 }
   print("User keys:")
   keys = object.keys(user)

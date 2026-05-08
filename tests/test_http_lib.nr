@@ -1,6 +1,6 @@
 import http
 
-main:
+main():
   print("HTTP module loaded")
   app = http.app()
   print("App created")

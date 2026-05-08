@@ -191,6 +191,14 @@ static void nr_resolve_node(AstNode *node, ResolverScope *scope) {
     break;
   case AST_FUNC_DECL:
   do_func_decl: {
+    // Resolve defaults in the outer scope
+    if (node->data.func_decl.param_defaults) {
+        for (int i = 0; i < node->data.func_decl.param_count; i++) {
+            if (node->data.func_decl.param_defaults[i]) {
+                nr_resolve_node(node->data.func_decl.param_defaults[i], scope);
+            }
+        }
+    }
     ResolverScope inner = {.parent = scope, .count = 0};
     for (int i = 0; i < node->data.func_decl.param_count; i++) {
       inner.vars[inner.count++] = node->data.func_decl.params[i];
@@ -1137,16 +1145,36 @@ static Value eval_call(AstNode *node, Environment *env) {
       Value port_v = eval(node->data.call.args[0], env);
       Value routes_v = eval(node->data.call.args[1], env);
       int port = (int)port_v.data.i;
-      int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-      if (server_fd < 0) { perror("socket failed"); return val_nil(); }
-      int opt = 1;
-      setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+      int server_fd;
       struct sockaddr_in address;
       address.sin_family = AF_INET;
       address.sin_addr.s_addr = INADDR_ANY;
       address.sin_port = htons(port);
-      if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("bind failed"); return val_nil();
+
+      while (1) {
+        server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (server_fd < 0) {
+          perror("socket failed");
+          return val_nil();
+        }
+        int opt = 1;
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+        if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+          if (errno == EADDRINUSE) {
+            printf("⚠️  Port %d is busy, retrying in 2s...\n", port);
+            fflush(stdout);
+            close(server_fd);
+            sleep(2);
+            continue;
+          }
+          perror("bind failed");
+          close(server_fd);
+          return val_nil();
+        }
+        break;
       }
       if (listen(server_fd, 3) < 0) {
         perror("listen failed"); return val_nil();
@@ -1232,8 +1260,54 @@ static Value eval_call(AstNode *node, Environment *env) {
         write(new_socket, body, body_len);
         close(new_socket);
       }
+    }
+    if (strcmp(full_name, "__builtin_file_write") == 0) {
+      Value path = eval(node->data.call.args[0], env);
+      Value content = eval(node->data.call.args[1], env);
+      if (path.type != VAL_STR || content.type != VAL_STR) return val_nil();
+      FILE *f = fopen(path.data.s, "wb");
+      if (f) {
+        fwrite(content.data.s, 1, strlen(content.data.s), f);
+        fclose(f);
+        return val_bool(1);
+      }
+      return val_bool(0);
+    }
+    if (strcmp(full_name, "__builtin_file_delete") == 0) {
+      Value path = eval(node->data.call.args[0], env);
+      if (path.type != VAL_STR) return val_nil();
+      return val_bool(remove(path.data.s) == 0);
+    }
+    if (strcmp(full_name, "__builtin_file_exists") == 0) {
+      Value path = eval(node->data.call.args[0], env);
+      if (path.type != VAL_STR) return val_nil();
+      return val_bool(access(path.data.s, F_OK) == 0);
+    }
+    if (strcmp(full_name, "__builtin_args") == 0) {
+      extern int g_argc;
+      extern char **g_argv;
+      Value res = val_arr();
+      for (int i = 0; i < g_argc; i++) {
+        nr_rt_push(res, val_str(nr_strdup(g_argv[i])));
+      }
+      return res;
+    }
+    if (strcmp(full_name, "__builtin_time_now") == 0) {
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+      return val_float((double)tv.tv_sec + (double)tv.tv_usec / 1000000.0);
+    }
+    if (strcmp(full_name, "__builtin_exit_proc") == 0) {
+      Value code = eval(node->data.call.args[0], env);
+      exit(code.type == VAL_INT ? (int)code.data.i : 0);
       return val_nil();
     }
+    if (strcmp(full_name, "__builtin_delay") == 0) {
+      Value ms = eval(node->data.call.args[0], env);
+      if (ms.type == VAL_INT) usleep(ms.data.i * 1000);
+      return val_nil();
+    }
+
     if (strcmp(full_name, "print") == 0 || strcmp(full_name, "println") == 0) {
       int is_println = strcmp(full_name, "println") == 0;
       for (int i = 0; i < node->data.call.arg_count; i++) {
@@ -1358,16 +1432,58 @@ static Value eval_call(AstNode *node, Environment *env) {
         env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
     if (obj.type != VAL_NIL)
       env_define(call_env, "self", obj);
-    for (int i = 0;
-         i < node->data.call.arg_count && i < decl->data.func_decl.param_count;
-         i++) {
-      Value arg = eval(node->data.call.args[i], env);
-      if (arg.type == VAL_RETURN)
-        arg = *arg.data.return_val;
-      if (call_env->slots && i < call_env->slot_count)
-        call_env->slots[i] = arg;
-      else
-        env_define(call_env, decl->data.func_decl.params[i], arg);
+    // 1. Initialize with defaults
+    for (int i = 0; i < decl->data.func_decl.param_count; i++) {
+        if (decl->data.func_decl.param_defaults && decl->data.func_decl.param_defaults[i]) {
+            call_env->slots[i] = eval(decl->data.func_decl.param_defaults[i], env);
+        } else {
+            call_env->slots[i] = val_nil();
+        }
+    }
+
+    // 2. Bind positional arguments
+    int pos_idx = 0;
+    int arg_idx = 0;
+    for (; arg_idx < node->data.call.arg_count; arg_idx++) {
+        if (node->data.call.arg_names && node->data.call.arg_names[arg_idx]) continue;
+        
+        if (pos_idx < decl->data.func_decl.param_count) {
+            if (decl->data.func_decl.is_variadic && pos_idx == decl->data.func_decl.param_count - 1) {
+                break; // Stop for variadic packing
+            }
+            Value arg = eval(node->data.call.args[arg_idx], env);
+            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+            call_env->slots[pos_idx++] = arg;
+        }
+    }
+
+    // 3. Bind named arguments
+    for (int i = 0; i < node->data.call.arg_count; i++) {
+        if (!node->data.call.arg_names || !node->data.call.arg_names[i]) continue;
+        char* name = node->data.call.arg_names[i];
+        int slot = -1;
+        for (int j=0; j<decl->data.func_decl.param_count; j++) {
+            if (strcmp(decl->data.func_decl.params[j], name) == 0) {
+                slot = j; break;
+            }
+        }
+        if (slot != -1) {
+            Value arg = eval(node->data.call.args[i], env);
+            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+            call_env->slots[slot] = arg;
+        }
+    }
+
+    // 4. Bind variadic arguments
+    if (decl->data.func_decl.is_variadic) {
+        Value var_arr = val_arr();
+        for (; arg_idx < node->data.call.arg_count; arg_idx++) {
+            if (node->data.call.arg_names && node->data.call.arg_names[arg_idx]) continue;
+            Value arg = eval(node->data.call.args[arg_idx], env);
+            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+            nr_rt_push(var_arr, arg);
+        }
+        call_env->slots[decl->data.func_decl.param_count - 1] = var_arr;
     }
     Value res = eval(decl->data.func_decl.body, call_env);
     env_free(call_env);
@@ -1446,6 +1562,9 @@ Value eval(AstNode *node, Environment *env) {
 
     if (node->data.assign.slot != -1 && env->slots) {
       env->slots[node->data.assign.slot] = v;
+      if (node->data.assign.target) {
+        env_define(env, node->data.assign.target, v);
+      }
       return v;
     }
 
@@ -1746,7 +1865,9 @@ Value eval(AstNode *node, Environment *env) {
                                                : node->data.for_stmt.var;
     for (int i = 0; i < iter.data.arr->count; i++) {
       if (node->data.for_stmt.slot != -1 && env->slots) {
-        env->slots[node->data.for_stmt.slot] = *iter.data.arr->elements[i];
+        Value val = *iter.data.arr->elements[i];
+        env->slots[node->data.for_stmt.slot] = val;
+        env_define(env, var_name, val);
       } else {
         env_define(env, var_name, *iter.data.arr->elements[i]);
       }

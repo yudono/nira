@@ -1,4 +1,4 @@
-export main:
+export main():
   import math as m
 
   print("Namespace Test:")

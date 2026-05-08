@@ -9,15 +9,15 @@ _tasks = [
 ]
 _next_id = 4
 
-handle_index req:
+handle_index(req):
   index_content = file.read("examples/index.html")
   return { status: 200, body: index_content }
 
-handle_get_tasks req:
-  return { status: 200, body: __builtin_json_encode(_tasks), content_type: "application/json" }
+handle_get_tasks(req):
+  return { status: 200, body: json.stringify(_tasks), content_type: "application/json" }
 
-handle_create_task req:
-  data = __builtin_json_parse(req.body)
+handle_create_task(req):
+  data = json.parse(req.body)
   new_task = { 
     id: _next_id, 
     title: data.title, 
@@ -25,9 +25,9 @@ handle_create_task req:
   }
   _tasks.push(new_task)
   _next_id = _next_id + 1
-  return { status: 200, body: __builtin_json_encode(new_task), content_type: "application/json" }
+  return { status: 200, body: json.stringify(new_task), content_type: "application/json" }
 
-handle_delete_task req:
+handle_delete_task(req):
   id_str = req.params.id
   target_id = toInt(id_str)
   new_list = []
@@ -35,9 +35,9 @@ handle_delete_task req:
     if t.id != target_id:
       new_list.push(t)
   _tasks = new_list
-  return { status: 200, body: __builtin_json_encode({ ok: true }), content_type: "application/json" }
+  return { status: 200, body: json.stringify({ ok: true }), content_type: "application/json" }
 
-main:
+main():
   println("🚀 Nira Task Manager starting...")
   app = http.app()
   

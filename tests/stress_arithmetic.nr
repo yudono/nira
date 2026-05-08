@@ -5,13 +5,13 @@
 # and floating-point precision boundaries.
 
 # --- Integer Factorial Test ---
-factorial n:
+factorial(n):
   if n <= 1:
     return 1
   return n * factorial(n - 1)
 
 # --- Fibonacci Stress (Large Index) ---
-fib_iter n:
+fib_iter(n):
   if n <= 0:
     return 0
   if n == 1:
@@ -27,7 +27,7 @@ fib_iter n:
   return b
 
 # --- Power function ---
-power base, exp:
+power(base, exp):
   result = 1
   i = 0
   while i < exp:
@@ -36,7 +36,7 @@ power base, exp:
   return result
 
 # --- Sum of series (precision test) ---
-harmonic_sum n:
+harmonic_sum(n):
   total = 0.0
   i = 1
   while i <= n:
@@ -44,7 +44,7 @@ harmonic_sum n:
     i = i + 1
   return total
 
-export main:
+export main():
   print("=== STRESS: Arithmetic ===")
 
   # Small factorials (sanity check)

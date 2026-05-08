@@ -9,7 +9,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <errno.h>
 int nr_argc; char** nr_argv;
 typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_FLOAT, VAL_ERROR } ValueType;
 typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;
@@ -128,18 +127,10 @@ Value nr_rt_json_parse(Value self, Value s, Value _v1, Value _v2, Value _v3, Val
 Value nr_rt_file_read(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4) { if(path.type!=VAL_STR) return val_nil(); FILE* f=fopen(path.data.s, "rb"); if(!f) return val_nil(); fseek(f, 0, SEEK_END); long s=ftell(f); rewind(f); char* b=nr_alloc(s+1); fread(b, 1, s, f); b[s]=0; fclose(f); return val_str(b); }
 
 Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Value _v4, Value _v5) {
-  int server_fd; struct sockaddr_in addr; addr.sin_family=AF_INET; addr.sin_addr.s_addr=INADDR_ANY; addr.sin_port=htons(port_v.data.i);
-  while(1) {
-    server_fd = socket(AF_INET, SOCK_STREAM, 0); if(server_fd<0){perror("socket");return val_nil();}
-    int opt=1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-#ifdef SO_REUSEPORT
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-#endif
-    if(bind(server_fd,(struct sockaddr*)&addr,sizeof(addr))<0) {
-      if(errno==EADDRINUSE) { printf("⚠️  Port %lld is busy, retrying in 2s...\n", port_v.data.i); fflush(stdout); close(server_fd); sleep(2); continue; }
-      perror("bind"); close(server_fd); return val_nil();
-    } break;
-  }
+  int server_fd = socket(AF_INET, SOCK_STREAM, 0); if(server_fd<0){perror("socket");return val_nil();}
+  int opt=1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  struct sockaddr_in addr; addr.sin_family=AF_INET; addr.sin_addr.s_addr=INADDR_ANY; addr.sin_port=htons(port_v.data.i);
+  if(bind(server_fd,(struct sockaddr*)&addr,sizeof(addr))<0){perror("bind");return val_nil();}
   if(listen(server_fd,3)<0){perror("listen");return val_nil();}
   printf("Nira Server listening on port %lld...\n", port_v.data.i); fflush(stdout);
   while(1) {
@@ -229,10 +220,9 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "http") == 0) { Value m = val_obj(); set_field(m, "app", val_func(nr_rt_http_app)); return m; }
   return val_obj();
 }
-Value nr_handle_index(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
-Value nr_handle_get_tasks(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
-Value nr_handle_create_task(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
-Value nr_handle_delete_task(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_add(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_greet(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_sum(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
 Value nr_v_start;
 Value nr_v_end;
 Value nr_v_sum;
@@ -249,60 +239,36 @@ Value nr_v_toInt;
 Value nr_v_json;
 Value nr_v_file;
 Value nr_v_http;
-Value nr_v__tasks;
-Value nr_v__next_id;
-Value nr_v_handle_index;
-Value nr_v_index_content;
-Value nr_v_handle_get_tasks;
-Value nr_v_handle_create_task;
-Value nr_v_data;
-Value nr_v_new_task;
-Value nr_v_handle_delete_task;
-Value nr_v_id_str;
-Value nr_v_target_id;
-Value nr_v_new_list;
-Value nr_v_t;
-Value nr_v_app;
-Value nr_handle_index(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+Value nr_v_add;
+Value nr_v_greet;
+Value nr_v_total;
+Value nr_add(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
   long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_req = _v0; if(nr_v_req.type == VAL_NIL) { }
-  nr_v_index_content = ({ Value _f = get_field(nr_v_file, "read"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_file, val_str("examples/index.html"), val_nil(), val_nil(), val_nil(), val_nil()); });
-  return ({ Value _o = val_obj(); set_field(_o, "status", val_int(200)); set_field(_o, "body", nr_v_index_content); _o; });
+  Value nr_v_a = _v0; if(nr_v_a.type == VAL_NIL) { }
+  Value nr_v_b = _v1; if(nr_v_b.type == VAL_NIL) { }
+  return nr_rt_add(nr_v_a, nr_v_b);
   return val_nil();
 }
-Value nr_handle_get_tasks(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+Value nr_greet(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
   long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_req = _v0; if(nr_v_req.type == VAL_NIL) { }
-  return ({ Value _o = val_obj(); set_field(_o, "status", val_int(200)); set_field(_o, "body", ({ Value _f = get_field(nr_v_json, "stringify"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_json, nr_v__tasks, val_nil(), val_nil(), val_nil(), val_nil()); })); set_field(_o, "content_type", val_str("application/json")); _o; });
+  Value nr_v_name = _v0; if(nr_v_name.type == VAL_NIL) { }
+  Value nr_v_greeting = _v1; if(nr_v_greeting.type == VAL_NIL) { nr_v_greeting = val_str("Hello"); }
+  return nr_rt_add(nr_rt_add(nr_v_greeting, val_str(" ")), nr_v_name);
   return val_nil();
 }
-Value nr_handle_create_task(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+Value nr_sum(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
   long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_req = _v0; if(nr_v_req.type == VAL_NIL) { }
-  nr_v_data = ({ Value _f = get_field(nr_v_json, "parse"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_json, nr_rt_at(val_nil(), nr_v_req, val_str("body"), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); });
-  nr_v_new_task = ({ Value _o = val_obj(); set_field(_o, "id", nr_v__next_id); set_field(_o, "title", nr_rt_at(val_nil(), nr_v_data, val_str("title"), val_nil(), val_nil(), val_nil())); set_field(_o, "done", val_bool(false)); _o; });
-({ nr_rt_push(val_nil(), nr_v__tasks, nr_v_new_task, val_nil(), val_nil(), val_nil()); val_nil(); });
-  nr_v__next_id = nr_rt_add(nr_v__next_id, val_int(1));
-  return ({ Value _o = val_obj(); set_field(_o, "status", val_int(200)); set_field(_o, "body", ({ Value _f = get_field(nr_v_json, "stringify"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_json, nr_v_new_task, val_nil(), val_nil(), val_nil(), val_nil()); })); set_field(_o, "content_type", val_str("application/json")); _o; });
-  return val_nil();
-}
-Value nr_handle_delete_task(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
-  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_req = _v0; if(nr_v_req.type == VAL_NIL) { }
-  nr_v_id_str = nr_rt_at(val_nil(), nr_rt_at(val_nil(), nr_v_req, val_str("params"), val_nil(), val_nil(), val_nil()), val_str("id"), val_nil(), val_nil(), val_nil());
-  nr_v_target_id = nr_rt_to_int(val_nil(), nr_v_id_str, val_nil(), val_nil(), val_nil(), val_nil());
-  nr_v_new_list = ({ Value _a = val_arr(); _a; });
-  { Value _iter = nr_v__tasks; if (_iter.type == VAL_ARR) {
+  Value nr_v_nums = val_arr();
+  Value _vs[] = {_v0, _v1, _v2, _v3, _v4}; for(int _vi=0;_vi<5;_vi++) if(_vs[_vi].type!=VAL_NIL) nr_rt_push(val_nil(), nr_v_nums, _vs[_vi], val_nil(), val_nil(), val_nil());
+  nr_v_total = val_int(0);
+  { Value _iter = nr_v_nums; if (_iter.type == VAL_ARR) {
     for (int _i = 0; _i < _iter.data.arr->count; _i++) {
-      nr_v_t = _iter.data.arr->elements[_i];
-  if (((nr_rt_at(val_nil(), nr_v_t, val_str("id"), val_nil(), val_nil(), val_nil())).data.i != (nr_v_target_id).data.i)) {
-({ nr_rt_push(val_nil(), nr_v_new_list, nr_v_t, val_nil(), val_nil(), val_nil()); val_nil(); });
-  };
+      nr_v_n = _iter.data.arr->elements[_i].data.i;
+  nr_v_total = nr_rt_add(nr_v_total, val_int(nr_v_n));
     }
   } }
 ;
-  nr_v__tasks = nr_v_new_list;
-  return ({ Value _o = val_obj(); set_field(_o, "status", val_int(200)); set_field(_o, "body", ({ Value _f = get_field(nr_v_json, "stringify"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_json, ({ Value _o = val_obj(); set_field(_o, "ok", val_bool(true)); _o; }), val_nil(), val_nil(), val_nil(), val_nil()); })); set_field(_o, "content_type", val_str("application/json")); _o; });
+  return nr_v_total;
   return val_nil();
 }
 int main(int argc, char** argv) {
@@ -325,44 +291,23 @@ int main(int argc, char** argv) {
   nr_v_json = val_nil();
   nr_v_file = val_nil();
   nr_v_http = val_nil();
-  nr_v__tasks = val_nil();
-  nr_v__next_id = val_nil();
-  nr_v_handle_index = val_nil();
-  nr_v_index_content = val_nil();
-  nr_v_handle_get_tasks = val_nil();
-  nr_v_handle_create_task = val_nil();
-  nr_v_data = val_nil();
-  nr_v_new_task = val_nil();
-  nr_v_handle_delete_task = val_nil();
-  nr_v_id_str = val_nil();
-  nr_v_target_id = val_nil();
-  nr_v_new_list = val_nil();
-  nr_v_t = val_nil();
-  nr_v_app = val_nil();
+  nr_v_add = val_nil();
+  nr_v_greet = val_nil();
+  nr_v_total = val_nil();
   nr_v_toInt = val_func(nr_rt_to_int);
   nr_v_json = nr_rt_load_module("json");
   nr_v_file = nr_rt_load_module("file");
   nr_v_http = nr_rt_load_module("http");
-  nr_v_http = nr_rt_load_module("http");
-;
-  nr_v_file = nr_rt_load_module("file");
-;
-  nr_v_json = nr_rt_load_module("json");
-;
-  nr_v__tasks = ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, ({ Value _o = val_obj(); set_field(_o, "id", val_int(1)); set_field(_o, "title", val_str("Learn Nira Language")); set_field(_o, "done", val_bool(false)); _o; }), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, ({ Value _o = val_obj(); set_field(_o, "id", val_int(2)); set_field(_o, "title", val_str("Master C Backend")); set_field(_o, "done", val_bool(true)); _o; }), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, ({ Value _o = val_obj(); set_field(_o, "id", val_int(3)); set_field(_o, "title", val_str("Build Premium Web App")); set_field(_o, "done", val_bool(false)); _o; }), val_nil(), val_nil(), val_nil()); _a; });
-  nr_v__next_id = val_int(4);
 ;
 ;
 ;
 ;
-;
-({ nr_rt_print(val_nil(), val_str("🚀 Nira Task Manager starting..."), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
-  nr_v_app = ({ Value _f = get_field(nr_v_http, "app"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_http, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); });
-({ Value _f = get_field(nr_v_app, "get"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_app, val_str("/"), val_func(nr_handle_index), val_nil(), val_nil(), val_nil()); });
-({ Value _f = get_field(nr_v_app, "get"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_app, val_str("/api/tasks"), val_func(nr_handle_get_tasks), val_nil(), val_nil(), val_nil()); });
-({ Value _f = get_field(nr_v_app, "post"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_app, val_str("/api/tasks"), val_func(nr_handle_create_task), val_nil(), val_nil(), val_nil()); });
-({ Value _f = get_field(nr_v_app, "delete"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_app, val_str("/api/tasks/:id"), val_func(nr_handle_delete_task), val_nil(), val_nil(), val_nil()); });
-({ nr_rt_print(val_nil(), val_str("✨ Server ready at http://localhost:3000"), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
-({ Value _f = get_field(nr_v_app, "listen"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_app, val_int(3000), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ nr_rt_print(val_nil(), val_str("Main started"), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), val_str("add(5, 10) ="), val_nil(), val_nil(), val_nil(), val_nil()); printf(" "); nr_rt_print(val_nil(), nr_add(val_nil(), val_int(5), val_int(10), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), val_str("greet(\"Budi\") ="), val_nil(), val_nil(), val_nil(), val_nil()); printf(" "); nr_rt_print(val_nil(), nr_greet(val_nil(), val_str("Budi"), val_nil(), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), val_str("greet(\"Budi\", \"Hi\") ="), val_nil(), val_nil(), val_nil(), val_nil()); printf(" "); nr_rt_print(val_nil(), nr_greet(val_nil(), val_str("Budi"), val_str("Hi"), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), val_str("sum(1, 2, 3, 4) ="), val_nil(), val_nil(), val_nil(), val_nil()); printf(" "); nr_rt_print(val_nil(), nr_sum(val_nil(), val_int(1), val_int(2), val_int(3), val_int(4), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), val_str("add(b=20, a=5) ="), val_nil(), val_nil(), val_nil(), val_nil()); printf(" "); nr_rt_print(val_nil(), nr_add(val_nil(), val_int(5), val_int(20), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), val_str("greet(greeting=\"Halo\", name=\"Agus\") ="), val_nil(), val_nil(), val_nil(), val_nil()); printf(" "); nr_rt_print(val_nil(), nr_greet(val_nil(), val_str("Agus"), val_str("Halo"), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
   return 0; 
 }

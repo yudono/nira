@@ -396,26 +396,67 @@ static AstNode* parse_primary(Parser* p) {
         int capacity = 8;
         int count = 0;
         char** params = nr_malloc(sizeof(char*) * capacity);
+        char** param_types = nr_malloc(sizeof(char*) * capacity);
+        struct AstNode** param_defaults = nr_malloc(sizeof(struct AstNode*) * capacity);
+        int is_variadic = 0;
 
-        if (check(p, TOKEN_LPAREN)) {
-            report_error(p, p->current, "Anonymous functions should not use parentheses. Use 'fn p1 p2:' instead.");
-            return NULL;
-        }
-
-        // Command-style parameters: fn p1 p2:
-        while (check(p, TOKEN_IDENT)) {
-            advance(p);
-            if (count >= capacity) {
-                int old_cap = capacity;
-                capacity *= 2;
-                params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+        if (match(p, TOKEN_LPAREN)) {
+            if (!check(p, TOKEN_RPAREN)) {
+                do {
+                    if (count >= capacity) {
+                        int old_cap = capacity;
+                        capacity *= 2;
+                        params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                        param_types = nr_realloc(param_types, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                        param_defaults = nr_realloc(param_defaults, sizeof(struct AstNode*) * old_cap, sizeof(struct AstNode*) * capacity);
+                    }
+                    
+                    param_types[count] = NULL;
+                    param_defaults[count] = NULL;
+                    
+                    if (match(p, TOKEN_DOT_DOT_DOT)) {
+                        is_variadic = 1;
+                    }
+                    
+                    consume(p, TOKEN_IDENT, "Expect parameter name");
+                    params[count] = copy_token_text(p->previous);
+                    
+                    if (match(p, TOKEN_COLON)) {
+                        consume(p, TOKEN_IDENT, "Expect type after ':'");
+                        param_types[count] = copy_token_text(p->previous);
+                    }
+                    
+                    if (match(p, TOKEN_EQUALS)) {
+                        param_defaults[count] = parse_expression(p);
+                    }
+                    
+                    count++;
+                } while (match(p, TOKEN_COMMA));
             }
-            params[count++] = copy_token_text(p->previous);
-            if (match(p, TOKEN_COMMA)) {}
+            consume(p, TOKEN_RPAREN, "Expect ')' after parameters");
+        } else {
+            // Command-style parameters: fn p1 p2: (legacy)
+            while (check(p, TOKEN_IDENT)) {
+                advance(p);
+                if (count >= capacity) {
+                    int old_cap = capacity;
+                    capacity *= 2;
+                    params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                    param_types = nr_realloc(param_types, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                    param_defaults = nr_realloc(param_defaults, sizeof(struct AstNode*) * old_cap, sizeof(struct AstNode*) * capacity);
+                }
+                param_types[count] = NULL;
+                param_defaults[count] = NULL;
+                params[count++] = copy_token_text(p->previous);
+                if (match(p, TOKEN_COMMA)) {}
+            }
         }
         
         node->data.func_decl.params = params;
         node->data.func_decl.param_count = count;
+        node->data.func_decl.param_types = param_types;
+        node->data.func_decl.param_defaults = param_defaults;
+        node->data.func_decl.is_variadic = is_variadic;
         
         consume(p, TOKEN_COLON, "Expect ':' after anonymous function signature");
         while (match(p, TOKEN_NEWLINE)) ;
@@ -533,18 +574,30 @@ static AstNode* parse_primary(Parser* p) {
             int capacity = 8;
             int count = 0;
             AstNode** args = nr_malloc(sizeof(AstNode*) * capacity);
+            char** arg_names = nr_malloc(sizeof(char*) * capacity);
             while (!check(p, TOKEN_RPAREN) && !check(p, TOKEN_EOF)) {
                 if (count >= capacity) {
                     int old_cap = capacity;
                     capacity *= 2;
                     args = nr_realloc(args, sizeof(AstNode*) * old_cap, sizeof(AstNode*) * capacity);
+                    arg_names = nr_realloc(arg_names, sizeof(char*) * old_cap, sizeof(char*) * capacity);
                 }
-                AstNode* arg_expr = parse_expression(p);
-                if (!arg_expr) {
-                    advance(p); // PREVENT INFINITE LOOP
+                
+                if (check(p, TOKEN_IDENT) && lexer_peek_n(p->lexer, 1) == TOKEN_EQUALS) {
+                    advance(p); // IDENT
+                    arg_names[count] = copy_token_text(p->previous);
+                    advance(p); // EQUALS
+                    args[count++] = parse_expression(p);
                 } else {
-                    args[count++] = arg_expr;
+                    arg_names[count] = NULL;
+                    AstNode* arg_expr = parse_expression(p);
+                    if (!arg_expr) {
+                        advance(p);
+                    } else {
+                        args[count++] = arg_expr;
+                    }
                 }
+                
                 if (match(p, TOKEN_COMMA)) {}
             }
             consume(p, TOKEN_RPAREN, "Expect ')' after arguments");
@@ -563,11 +616,16 @@ static AstNode* parse_primary(Parser* p) {
                 lambda->data.func_decl.name = nr_strdup("anonymous");
                 lambda->data.func_decl.params = params;
                 lambda->data.func_decl.param_count = count;
+                lambda->data.func_decl.param_types = nr_malloc(sizeof(char*) * count);
+                for(int i=0; i<count; i++) lambda->data.func_decl.param_types[i] = NULL;
+                lambda->data.func_decl.param_defaults = nr_malloc(sizeof(AstNode*) * count);
+                for(int i=0; i<count; i++) lambda->data.func_decl.param_defaults[i] = NULL;
                 lambda->data.func_decl.body = parse_expression(p); finalize_func_locals(lambda);
                 return lambda;
             }
             
             call->data.call.args = args;
+            call->data.call.arg_names = arg_names;
             call->data.call.arg_count = count;
             return call;
         }
@@ -988,40 +1046,75 @@ static AstNode* parse_statement(Parser* p) {
             int capacity = 8;
             char** params = nr_malloc(sizeof(char*) * capacity);
             char** param_types = nr_malloc(sizeof(char*) * capacity);
+            struct AstNode** param_defaults = nr_malloc(sizeof(struct AstNode*) * capacity);
             int count = 0;
+            int is_variadic = 0;
             
-            if (check(p, TOKEN_LPAREN)) {
-                report_error(p, p->current, "Function declarations should not use parentheses. Use 'name param1 param2:' instead.");
-                return NULL;
-            }
-
-            // Command-style parameters: IDENT p1 p2:
-            while (check(p, TOKEN_IDENT)) {
-                advance(p);
-                if (count >= capacity) {
-                    int old_cap = capacity;
-                    capacity *= 2;
-                    params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
-                    param_types = nr_realloc(param_types, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+            if (match(p, TOKEN_LPAREN)) {
+                if (!check(p, TOKEN_RPAREN)) {
+                    do {
+                        if (count >= capacity) {
+                            int old_cap = capacity;
+                            capacity *= 2;
+                            params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                            param_types = nr_realloc(param_types, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                            param_defaults = nr_realloc(param_defaults, sizeof(struct AstNode*) * old_cap, sizeof(struct AstNode*) * capacity);
+                        }
+                        
+                        param_types[count] = NULL;
+                        param_defaults[count] = NULL;
+                        
+                        if (match(p, TOKEN_DOT_DOT_DOT)) {
+                            is_variadic = 1;
+                        }
+                        
+                        consume(p, TOKEN_IDENT, "Expect parameter name");
+                        params[count] = copy_token_text(p->previous);
+                        
+                        if (match(p, TOKEN_COLON)) {
+                            consume(p, TOKEN_IDENT, "Expect type after ':'");
+                            param_types[count] = copy_token_text(p->previous);
+                        }
+                        
+                        if (match(p, TOKEN_EQUALS)) {
+                            param_defaults[count] = parse_expression(p);
+                        }
+                        
+                        count++;
+                        if (is_variadic) break; // Variadic must be last
+                    } while (match(p, TOKEN_COMMA));
                 }
-                params[count] = copy_token_text(p->previous);
-                param_types[count] = NULL;
-                
-                // Only treat ':' as a type if it's followed by an identifier
-                // and NOT at the end of the signature
-                if (check(p, TOKEN_COLON) && lexer_peek_n(p->lexer, 1) == TOKEN_IDENT) {
-                    advance(p); // consume ':'
-                    advance(p); // consume IDENT
-                    param_types[count] = copy_token_text(p->previous);
+                consume(p, TOKEN_RPAREN, "Expect ')' after function parameters");
+            } else {
+                // Backward compatibility: command-style parameters p1 p2:
+                while (check(p, TOKEN_IDENT)) {
+                    advance(p);
+                    if (count >= capacity) {
+                        int old_cap = capacity;
+                        capacity *= 2;
+                        params = nr_realloc(params, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                        param_types = nr_realloc(param_types, sizeof(char*) * old_cap, sizeof(char*) * capacity);
+                        param_defaults = nr_realloc(param_defaults, sizeof(struct AstNode*) * old_cap, sizeof(struct AstNode*) * capacity);
+                    }
+                    params[count] = copy_token_text(p->previous);
+                    param_types[count] = NULL;
+                    param_defaults[count] = NULL;
+                    
+                    if (check(p, TOKEN_COLON) && lexer_peek_n(p->lexer, 1) == TOKEN_IDENT) {
+                        advance(p); // consume ':'
+                        advance(p); // consume IDENT
+                        param_types[count] = copy_token_text(p->previous);
+                    }
+                    count++;
+                    if (match(p, TOKEN_COMMA)) {}
                 }
-                
-                count++;
-                if (match(p, TOKEN_COMMA)) {}
             }
             
             node->data.func_decl.params = params;
             node->data.func_decl.param_types = param_types;
+            node->data.func_decl.param_defaults = param_defaults;
             node->data.func_decl.param_count = count;
+            node->data.func_decl.is_variadic = is_variadic;
             node->data.func_decl.return_type = NULL;
             
             if (match(p, TOKEN_ARROW)) {

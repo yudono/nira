@@ -1,11 +1,11 @@
 from time import millis
 
-fib n:
+fib(n):
     if n < 2:
         return n
     return fib(n - 1) + fib(n - 2)
 
-main:
+main():
     start = millis()
     result = fib(40)
     end = millis()

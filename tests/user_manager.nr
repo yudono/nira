@@ -1,7 +1,7 @@
 # User Management Test
 # Specifically testing function calls with object literals using parentheses.
 
-create_user data:
+create_user(data):
   return {
     id: data.id,
     name: data.name,
@@ -9,14 +9,14 @@ create_user data:
     status: "active"
   }
 
-update_status user, new_status:
+update_status(user, new_status):
   user.status = new_status
   return user
 
-print_user user:
+print_user(user):
   print("User [" + toString(user.id) + "]: " + toString(user.name) + " (" + toString(user.role) + ") - " + toString(user.status))
 
-main:
+main():
   print("=== USER MANAGER TEST ===")
   
   # Call with object literal using parentheses

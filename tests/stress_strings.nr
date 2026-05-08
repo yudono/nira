@@ -4,7 +4,7 @@
 # Tests \n, \t, \\, \", multi-line strings ("""),
 # and string operations with special characters.
 
-export main:
+export main():
   print("=== STRESS: String Features ===")
 
   # --- Escape sequences ---

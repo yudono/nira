@@ -65,26 +65,28 @@ typedef struct AstNode {
             char* name;
             char** params;
             char** param_types;
+            struct AstNode** param_defaults; // [NEW] For optional parameters
             int param_count;
             struct AstNode* body;
             char* return_type;
-            int local_count; // [NEW]
+            int local_count; 
             int is_exported;
             int is_unpacking;
+            int is_variadic; // [NEW] 1 if last param is ...ident
         } func_decl;
 
         // Assignment
         struct {
             char* target;
             struct AstNode* value;
-            int slot; // [NEW]
+            int slot; 
         } assign;
 
         // Variable Reference
         struct {
             char* name;
             unsigned int hash;
-            int slot; // [NEW] -1 if not slotted
+            int slot; 
         } var_ref;
 
         // Literals
@@ -102,9 +104,10 @@ typedef struct AstNode {
             char* name;
             unsigned int hash;
             struct AstNode** args;
+            char** arg_names; // [NEW] For named parameters e.g. call(a=1)
             int arg_count;
-            struct AstNode* cached_decl; // [NEW] Pointer to the resolved function
-            int obj_slot; // [NEW] Slot index for the object in a dot call
+            struct AstNode* cached_decl; 
+            int obj_slot; 
         } call;
 
         // Binary

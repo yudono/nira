@@ -1,7 +1,7 @@
 import "task"
 import "sys"
 
-run args:
+run(args):
   cmd = ""
   arg_offset = 0
   

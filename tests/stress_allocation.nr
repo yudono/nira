@@ -1,7 +1,7 @@
 # Massive Object Allocation Stress Test
 # Tests memory management and Arena allocator.
 
-create_small_object id:
+create_small_object(id):
   return {
     id: id,
     type: "test",
@@ -10,7 +10,7 @@ create_small_object id:
     data: "some random string data to fill memory"
   }
 
-main:
+main():
   print("=== MASSIVE ALLOCATION TEST ===")
   
   iterations = 50

@@ -3,7 +3,7 @@ import time
 import math
 from math import sqrt
 
-main:
+main():
   a = 10
   # a = "20"
   b = 30

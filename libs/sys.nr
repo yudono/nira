@@ -1,10 +1,10 @@
 # sys library for Nira
 
-args:
+args():
   return __builtin_args()
 
-now:
+now():
   return __builtin_time_now()
 
-exit code:
+exit(code):
   __builtin_exit_proc(code)

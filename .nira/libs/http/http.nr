@@ -2,7 +2,7 @@
 
 _routes = []
 
-app:
+app():
   return {
     routes: _routes,
     get: _app_get,
@@ -12,17 +12,17 @@ app:
     listen: _app_listen
   }
 
-_app_get path, handler:
+_app_get(path, handler):
   _routes.push({ method: "GET", path: path, handler: handler })
 
-_app_post path, handler:
+_app_post(path, handler):
   _routes.push({ method: "POST", path: path, handler: handler })
 
-_app_put path, handler:
+_app_put(path, handler):
   _routes.push({ method: "PUT", path: path, handler: handler })
 
-_app_delete path, handler:
+_app_delete(path, handler):
   _routes.push({ method: "DELETE", path: path, handler: handler })
 
-_app_listen port:
+_app_listen(port):
   __builtin_http_serve(port, _routes)

@@ -5,54 +5,54 @@
 # function composition, and method patterns.
 
 # --- Counter factory (closure test) ---
-make_counter start:
+make_counter(start):
   count = start
   return {
-    increment: fn:
+    increment: fn():
       count = count + 1
       return count
-    get: fn:
+    get: fn():
       return count
-    reset: fn:
+    reset: fn():
       count = start
       return count
   }
 
 # --- Adder factory ---
-make_adder n:
-  return fn x:
+make_adder(n):
+  return fn(x):
     return x + n
 
 # --- Multiplier factory ---
-make_multiplier factor:
-  return fn x:
+make_multiplier(factor):
+  return fn(x):
     return x * factor
 
 # --- Compose two functions ---
-compose f, g:
-  return fn x:
+compose(f, g):
+  return fn(x):
     return f(g(x))
 
 # --- Object with methods (composition pattern) ---
-createAnimal name, sound:
+createAnimal(name, sound):
   return {
     name: name,
     sound: sound,
-    speak: fn:
+    speak: fn():
       return self.name + " says " + self.sound
-    rename: fn new_name:
+    rename: fn(new_name):
       self.name = new_name
       return self
   }
 
 # --- Pipeline pattern ---
-apply_all fns, value:
+apply_all(fns, value):
   result = value
   for f in fns:
     result = f(result)
   return result
 
-export main:
+export main():
   print("=== STRESS: Closures & Scope ===")
 
   # --- Counter closure ---
@@ -146,9 +146,9 @@ export main:
   print("")
   print("Nested Closure:")
   outer_val = 10
-  make_inner a:
-    return fn b:
-      return fn c:
+  make_inner(a):
+    return fn(b):
+      return fn(c):
         return a + b + c + outer_val
   nested = make_inner(1)
   nested2 = nested(2)

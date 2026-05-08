@@ -1,28 +1,28 @@
 # Object Composition and Method-like functions test
 
-create_point x, y:
+create_point(x, y):
   return { x: x, y: y }
 
-create_size w, h:
+create_size(w, h):
   return { w: w, h: h }
 
-create_rect x, y, w, h:
+create_rect(x, y, w, h):
   return {
     origin: create_point(x, y),
     size: create_size(w, h)
   }
 
 # "Method" for area
-get_area rect:
+get_area(rect):
   return rect.size.w * rect.size.h
 
 # "Method" for move
-move_rect rect, dx, dy:
+move_rect(rect, dx, dy):
   rect.origin.x = rect.origin.x + dx
   rect.origin.y = rect.origin.y + dy
 
 # "Method" for check containment
-contains_point rect, p:
+contains_point(rect, p):
   if p.x < rect.origin.x:
     return false
   if p.x > rect.origin.x + rect.size.w:
@@ -33,7 +33,7 @@ contains_point rect, p:
     return false
   return true
 
-main:
+main():
   print("=== OBJECT COMPOSITION TEST ===")
   
   r1 = create_rect(10, 10, 50, 50)
