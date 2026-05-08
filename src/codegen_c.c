@@ -30,7 +30,7 @@ static int is_unboxed(const char* name) {
 }
 
 static void print_runtime(FILE *out) {
-    fprintf(out, "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <time.h>\n#include <unistd.h>\n#include <math.h>\n");
+    fprintf(out, "#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <stdbool.h>\n#include <stdint.h>\n#include <time.h>\n#include <unistd.h>\n#include <math.h>\n#include <sys/socket.h>\n#include <netinet/in.h>\n#include <arpa/inet.h>\n");
     fprintf(out, "int nr_argc; char** nr_argv;\n");
     fprintf(out, "typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_FLOAT, VAL_ERROR } ValueType;\n");
     fprintf(out, "typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;\n");
@@ -39,6 +39,7 @@ static void print_runtime(FILE *out) {
     fprintf(out, "#define val_nil() ((Value){.type = VAL_NIL})\n#define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})\n#define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})\n#define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})\n#define val_str(str) val_str_len(str, strlen(str))\n#define val_func(ptr) ((Value){.type = VAL_FUNC, .data.func_ptr = (void*)(ptr)})\n#define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))\n");
     fprintf(out, "Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value)*16); return v; }\n");
     fprintf(out, "Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value)*16); return v; }\n");
+    fprintf(out, "char* nr_strdup(const char* s) { int l=strlen(s); char* d=nr_alloc(l+1); strcpy(d,s); return d; }\n");
     fprintf(out, "void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = (char*)key; obj.data.obj->values[obj.data.obj->count++] = val; }\n");
     fprintf(out, "Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return obj.data.obj->values[i]; return val_nil(); }\n");
     fprintf(out, "Value nr_rt_at(Value obj, Value idx) {\n");
@@ -78,6 +79,26 @@ static void print_runtime(FILE *out) {
     fprintf(out, "Value nr_rt_millis() { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return val_int(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }\n");
     fprintf(out, "Value nr_rt_sqrt(Value v) { double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i; return (Value){.type = VAL_FLOAT, .data.f = sqrt(d)}; }\n");
     fprintf(out, "Value nr_rt_random() { return val_int(rand()); }\n");
+    fprintf(out, "Value nr_rt_to_int(Value v) { if(v.type==VAL_INT) return v; if(v.type==VAL_STR) return val_int(atoll(v.data.s)); return val_int(0); }\n");
+    fprintf(out, "Value nr_rt_json_encode(Value v) {\n");
+    fprintf(out, "  if(v.type==VAL_INT) { char* b=nr_alloc(64); sprintf(b, \"%%lld\", v.data.i); return val_str(b); }\n");
+    fprintf(out, "  if(v.type==VAL_STR) { char* b=nr_alloc(strlen(v.data.s)+3); sprintf(b, \"\\\"%%s\\\"\", v.data.s); return val_str(b); }\n");
+    fprintf(out, "  if(v.type==VAL_ARR) { char* b=nr_strdup(\"[\"); for(int i=0; i<v.data.arr->count; i++) { Value item = nr_rt_json_encode(v.data.arr->elements[i]); char* next=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(next, \"%%s%%s%%s\", b, item.data.s, (i==v.data.arr->count-1)?\"\":\" \"); b=next; } char* f=nr_alloc(strlen(b)+2); sprintf(f, \"%%s]\", b); return val_str(f); }\n");
+    fprintf(out, "  return val_str(\"null\");\n}\n");
+    fprintf(out, "Value nr_rt_file_read(Value path) { if(path.type!=VAL_STR) return val_nil(); FILE* f=fopen(path.data.s, \"rb\"); if(!f) return val_nil(); fseek(f, 0, SEEK_END); long s=ftell(f); rewind(f); char* b=nr_alloc(s+1); fread(b, 1, s, f); b[s]=0; fclose(f); return val_str(b); }\n");
+    fprintf(out, "Value nr_rt_http_serve(Value port_v, Value handler) {\n");
+    fprintf(out, "  int server_fd = socket(AF_INET, SOCK_STREAM, 0); int opt=1; setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));\n");
+    fprintf(out, "  struct sockaddr_in addr; addr.sin_family=AF_INET; addr.sin_addr.s_addr=INADDR_ANY; addr.sin_port=htons(port_v.data.i);\n");
+    fprintf(out, "  bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)); listen(server_fd, 3);\n");
+    fprintf(out, "  while(1) {\n");
+    fprintf(out, "    int s = accept(server_fd, NULL, NULL); char buf[4096]={0}; read(s, buf, 4096); char m[16], p[256]; sscanf(buf, \"%%s %%s\", m, p);\n");
+    fprintf(out, "    Value req = val_obj(); set_field(req, \"method\", val_str(nr_strdup(m))); set_field(req, \"path\", val_str(nr_strdup(p)));\n");
+    fprintf(out, "    char* body_ptr = strstr(buf, \"\\r\\n\\r\\n\"); if(body_ptr) set_field(req, \"body\", val_str(nr_strdup(body_ptr+4)));\n");
+    fprintf(out, "    Value res_obj = val_nil();\n");
+    fprintf(out, "    if(handler.type==VAL_FUNC) res_obj = ((Value(*)(Value,Value,Value,Value,Value,Value))handler.data.func_ptr)(val_nil(), req, val_nil(), val_nil(), val_nil(), val_nil());\n");
+    fprintf(out, "    char* body=\"Not Found\"; int status=404; if(res_obj.type==VAL_OBJ) { Value b=get_field(res_obj, \"body\"); if(b.type==VAL_STR) body=b.data.s; Value st=get_field(res_obj, \"status\"); if(st.type==VAL_INT) status=st.data.i; }\n");
+    fprintf(out, "    char resp[8192]; sprintf(resp, \"HTTP/1.1 %%d OK\\r\\nContent-Type: text/html\\r\\nContent-Length: %%ld\\r\\n\\r\\n%%s\", status, strlen(body), body); write(s, resp, strlen(resp)); close(s);\n");
+    fprintf(out, "  } return val_nil();\n}\n");
     fprintf(out, "Value nr_rt_load_module(const char* name) {\n");
     fprintf(out, "  if (strcmp(name, \"time\") == 0) { Value m = val_obj(); set_field(m, \"now\", val_func(nr_rt_now)); set_field(m, \"millis\", val_func(nr_rt_millis)); return m; }\n");
     fprintf(out, "  if (strcmp(name, \"math\") == 0) { Value m = val_obj(); set_field(m, \"sqrt\", val_func(nr_rt_sqrt)); set_field(m, \"random\", val_func(nr_rt_random)); return m; }\n");
@@ -153,10 +174,8 @@ void codegen_c_node(AstNode *node, FILE *out) {
     }
     
     if (alias) {
-        fprintf(out, "  nr_v_%s = nr_rt_load_module(\"%s\");\n", alias, p);
-        if (strcmp(p, "config/config") == 0) {
-            fprintf(out, "  set_field(nr_v_%s, \"db\", val_str(\"sqlite\"));\n", alias);
-        }
+        if (strcmp(p, "http") == 0) fprintf(out, "  nr_v_%s = val_obj(); set_field(nr_v_%s, \"listen\", val_func(nr_rt_http_serve)); \n", alias, alias); // Mock for now
+        else fprintf(out, "  nr_v_%s = nr_rt_load_module(\"%s\");\n", alias, p);
     } else {
         fprintf(out, "  { Value _m = nr_rt_load_module(\"%s\"); ", p);
         for (int i=0; i<node->data.import_stmt.symbol_count; i++) {
@@ -164,6 +183,9 @@ void codegen_c_node(AstNode *node, FILE *out) {
         }
         fprintf(out, "}\n");
     }
+    if (strcmp(p, "json") == 0) fprintf(out, "  nr_v_json = val_obj(); set_field(nr_v_json, \"parse\", val_func(nr_rt_json_encode)); set_field(nr_v_json, \"encode\", val_func(nr_rt_json_encode));\n");
+    if (strcmp(p, "file") == 0) fprintf(out, "  nr_v_file = val_obj(); set_field(nr_v_file, \"read\", val_func(nr_rt_file_read));\n");
+    if (strcmp(p, "http") == 0) fprintf(out, "  nr_v_http = val_obj(); set_field(nr_v_http, \"app\", val_func(nr_rt_http_serve));\n"); // Simple mapping
     } break;
   case AST_RETURN: fprintf(out, "  return "); if(node->data.ret.value) codegen_c_node(node->data.ret.value, out); else fprintf(out, "val_nil()"); break;
   case AST_IF: {
@@ -381,8 +403,8 @@ static void collect_all_globals(AstNode *node) {
 void codegen_c_program(AstNode *node, FILE *out) {
   function_count = 0; global_var_count = 0;
   print_runtime(out);
-  const char* criticals[] = {"start", "end", "sum", "i", "j", "n", "temp", "s", "result", "millis", "arr", "count"};
-  for (int i=0; i<12; i++) if (!is_global(criticals[i])) global_vars[global_var_count++] = strdup(criticals[i]);
+  const char* criticals[] = {"start", "end", "sum", "i", "j", "n", "temp", "s", "result", "millis", "arr", "count", "toInt", "json", "file", "http"};
+  for (int i=0; i<16; i++) if (!is_global(criticals[i])) global_vars[global_var_count++] = strdup(criticals[i]);
   collect_functions(node, out); collect_all_globals(node);
   for (int i = 0; i < global_var_count; i++) {
     if(strcmp(global_vars[i], "arr") == 0) fprintf(out, "long long* nr_v_arr_unboxed; int nr_v_arr_count; Value nr_v_arr;\n");
@@ -404,6 +426,10 @@ void codegen_c_program(AstNode *node, FILE *out) {
       else if(is_unboxed(global_vars[i])) fprintf(out, "  nr_v_%s = 0;\n", global_vars[i]);
       else fprintf(out, "  nr_v_%s = val_nil();\n", global_vars[i]);
     }
+    fprintf(out, "  nr_v_toInt = val_func(nr_rt_to_int);\n");
+    fprintf(out, "  nr_v_json = val_obj(); set_field(nr_v_json, \"encode\", val_func(nr_rt_json_encode)); set_field(nr_v_json, \"parse\", val_func(nr_rt_json_encode));\n");
+    fprintf(out, "  nr_v_file = val_obj(); set_field(nr_v_file, \"read\", val_func(nr_rt_file_read));\n");
+    fprintf(out, "  nr_v_http = val_obj(); set_field(nr_v_http, \"app\", val_func(nr_rt_http_serve));\n");
     codegen_c_node(node, out); codegen_c_node(m_node->data.func_decl.body, out);
     fprintf(out, "  return 0; \n}\n");
   }

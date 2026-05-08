@@ -23,7 +23,7 @@
 int g_argc;
 char **g_argv;
 
-char nira_std_lib_path[1024] = "lib";
+char nira_std_lib_path[1024] = "libs";
 char nira_global_libs_path[1024] = ".nira/libs";
 
 void resolve_std_lib_path() {
@@ -43,9 +43,8 @@ void resolve_std_lib_path() {
         char *last_slash = strrchr(exe_dir, '/');
         if (last_slash) {
             *last_slash = '\0';
-            // lib/ is sibling to executable
-            snprintf(nira_std_lib_path, sizeof(nira_std_lib_path), "%s/lib", exe_dir);
-            // global .nira/libs/ is also sibling to executable
+            // libs/ is sibling to executable
+            snprintf(nira_std_lib_path, sizeof(nira_std_lib_path), "%s/libs", exe_dir);
             snprintf(nira_global_libs_path, sizeof(nira_global_libs_path), "%s/.nira/libs", exe_dir);
         }
     }
