@@ -70,10 +70,10 @@ user = {
 ## 🔹 Named Parameters
 
 ```nira
-createUser {
-  id: 1
+createUser({
+  id: 1,
   name: "Budi"
-}
+})
 ```
 
 ---
@@ -82,7 +82,7 @@ createUser {
 
 ```nira
 if user.id == 1:
-  print "found"
+  print("found")
 ```
 
 ---
@@ -91,7 +91,7 @@ if user.id == 1:
 
 ```nira
 for item in items:
-  print item.name
+  print(item.name)
 ```
 
 ---
@@ -201,7 +201,7 @@ makeUser:
 ```nira
 printUser:
   u = { id: 1 }
-  print u
+  print(u)
 ```
 
 👉 stack allocation
@@ -322,7 +322,7 @@ expression  = literal
 
 object      = "{" { IDENT ":" expression } "}"
 
-call        = IDENT expression
+call        = IDENT "(" [ expression_list ] ")"
 
 binary      = expression OP expression
 ```
@@ -427,7 +427,7 @@ nira add http
 ## Example
 
 ```nira
-http.get "/api"
+http.get("/api")
 ```
 
 ---
@@ -442,12 +442,12 @@ createUser data:
   }
 
 main:
-  user = createUser {
-    id: 1
+  user = createUser({
+    id: 1,
     name: "Budi"
-  }
+  })
 
-  print user.name
+  print(user.name)
 ```
 
 ---

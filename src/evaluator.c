@@ -85,25 +85,27 @@ static void nr_resolve_node(AstNode* node, ResolverScope* scope) {
             nr_resolve_node(node->data.binary.right, scope);
             break;
         case AST_CALL: {
-            char* dot = strchr(node->data.call.name, '.');
-            if (dot) {
-                int len = dot - node->data.call.name;
-                char obj_name[64];
-                if (len < 63) {
-                    strncpy(obj_name, node->data.call.name, len);
-                    obj_name[len] = '\0';
-                    
-                    // Resolve obj_name to slot
-                    ResolverScope* s = scope;
-                    while (s) {
-                        for (int i = 0; i < s->count; i++) {
-                            if (strcmp(obj_name, s->vars[i]) == 0) {
-                                if (s == scope) node->data.call.obj_slot = i;
-                                break;
+            if (node->data.call.name) {
+                char* dot = strchr(node->data.call.name, '.');
+                if (dot) {
+                    int len = dot - node->data.call.name;
+                    char obj_name[64];
+                    if (len < 63) {
+                        strncpy(obj_name, node->data.call.name, len);
+                        obj_name[len] = '\0';
+                        
+                        // Resolve obj_name to slot
+                        ResolverScope* s = scope;
+                        while (s) {
+                            for (int i = 0; i < s->count; i++) {
+                                if (strcmp(obj_name, s->vars[i]) == 0) {
+                                    if (s == scope) node->data.call.obj_slot = i;
+                                    break;
+                                }
                             }
+                            if (node->data.call.obj_slot != -1) break;
+                            s = s->parent;
                         }
-                        if (node->data.call.obj_slot != -1) break;
-                        s = s->parent;
                     }
                 }
             }
@@ -119,10 +121,16 @@ static void nr_resolve_node(AstNode* node, ResolverScope* scope) {
         case AST_RETURN:
             nr_resolve_node(node->data.ret.value, scope);
             break;
-        case AST_FOR:
+        case AST_FOR: {
+            int old_count = scope->count;
+            if (scope->count < 256) {
+                scope->vars[scope->count++] = node->data.for_stmt.alias ? node->data.for_stmt.alias : node->data.for_stmt.var;
+            }
             nr_resolve_node(node->data.for_stmt.iterable, scope);
             nr_resolve_node(node->data.for_stmt.body, scope);
+            scope->count = old_count;
             break;
+        }
         case AST_WHILE:
             nr_resolve_node(node->data.while_stmt.condition, scope);
             nr_resolve_node(node->data.while_stmt.body, scope);
@@ -159,6 +167,17 @@ static void nr_resolve_node(AstNode* node, ResolverScope* scope) {
 void nr_resolve(AstNode* program) {
     ResolverScope global = { .parent = NULL, .count = 0 };
     nr_resolve_node(program, &global);
+}
+
+static void array_push(Array* arr, Value val) {
+    if (arr->count >= arr->capacity) {
+        int old_cap = arr->capacity;
+        arr->capacity *= 2;
+        arr->elements = nr_realloc(arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * arr->capacity);
+    }
+    arr->elements[arr->count] = nr_malloc(sizeof(Value));
+    *arr->elements[arr->count] = val;
+    arr->count++;
 }
 
 void eval_set_field(Object* obj, const char* key, Value val) {
@@ -262,12 +281,17 @@ static int env_pool_count = 0;
 Environment* env_new(Environment* parent, int slot_count) {
     Environment* env = env_pool_count > 0 ? env_pool[--env_pool_count] : nr_malloc(sizeof(Environment));
     env->parent = parent;
-    env->capacity = 0;
     env->slot_count = slot_count;
+    env->count = 0;
+    env->capacity = 0;
+    env->table = NULL;
+    env->slots = NULL;
+    env->source = NULL;
+    env->filename = NULL;
+    
     if (slot_count > 0) {
         env->slots = &value_stack[value_stack_ptr];
         value_stack_ptr += slot_count;
-        // Only zero the FIRST slot if its small, or use memset
         for (int i = 0; i < slot_count; i++) env->slots[i].type = VAL_NIL;
     }
     return env;
@@ -562,14 +586,31 @@ static Value get_dot_value(Value obj, char* field) {
         if (strcmp(field, "length") == 0) return val_int(strlen(obj.data.s));
     }
     if (obj.type != VAL_OBJ || !field) return val_nil();
+
+    char* first_dot = strchr(field, '.');
+    if (first_dot) {
+        char base[64];
+        int len = first_dot - field;
+        if (len >= 63) return val_nil();
+        strncpy(base, field, len);
+        base[len] = '\0';
+        
+        Value sub_obj = val_nil();
+        for (int i=0; i<obj.data.obj->count; i++) {
+            if (obj.data.obj->keys[i] && strcmp(obj.data.obj->keys[i], base) == 0) {
+                sub_obj = *obj.data.obj->values[i];
+                break;
+            }
+        }
+        return get_dot_value(sub_obj, first_dot + 1);
+    }
+
     for (int i=0; i<obj.data.obj->count; i++) {
         if (obj.data.obj->keys[i] && strcmp(obj.data.obj->keys[i], field) == 0) {
             Value res = *obj.data.obj->values[i];
-            // printf("Found field %s: type=%d\n", field, res.type);
             return res;
         }
     }
-    // printf("Field %s not found in object with %d fields\n", field, obj.data.obj->count);
     return val_nil();
 }
 
@@ -671,17 +712,34 @@ static Value eval_binary(AstNode* node, Environment* env) {
         }
     }
     
-    if (left.type == VAL_STR && op == OP_ADD) {
-        AstNode* r_node = node->data.binary.right;
-        Value right;
-        if (r_node->type == AST_VAR_REF && r_node->data.var_ref.slot != -1 && env->slots) {
-            right = env->slots[r_node->data.var_ref.slot];
-        } else if (r_node->type == AST_LITERAL_STR) {
-            right = (Value){.type = VAL_STR, .data.s = r_node->data.str_val};
-        } else {
-            right = EVAL_FAST(r_node, env);
+    if (op == OP_EQ) {
+        if (left.type != right.type) return val_bool(0);
+        switch (left.type) {
+            case VAL_NIL: return val_bool(1);
+            case VAL_INT: return val_bool(left.data.i == right.data.i);
+            case VAL_FLOAT: return val_bool(left.data.f == right.data.f);
+            case VAL_STR: return val_bool(strcmp(left.data.s, right.data.s) == 0);
+            case VAL_BOOL: return val_bool(left.data.i == right.data.i);
+            case VAL_OBJ: return val_bool(left.data.obj == right.data.obj);
+            case VAL_ARR: return val_bool(left.data.arr == right.data.arr);
+            default: return val_bool(0);
         }
-        
+    }
+    if (op == OP_NEQ) {
+        if (left.type != right.type) return val_bool(1);
+        switch (left.type) {
+            case VAL_NIL: return val_bool(0);
+            case VAL_INT: return val_bool(left.data.i != right.data.i);
+            case VAL_FLOAT: return val_bool(left.data.f != right.data.f);
+            case VAL_STR: return val_bool(strcmp(left.data.s, right.data.s) != 0);
+            case VAL_BOOL: return val_bool(left.data.i != right.data.i);
+            case VAL_OBJ: return val_bool(left.data.obj != right.data.obj);
+            case VAL_ARR: return val_bool(left.data.arr != right.data.arr);
+            default: return val_bool(1);
+        }
+    }
+
+    if (left.type == VAL_STR && op == OP_ADD) {
         if (right.type == VAL_STR) {
             char* res = nr_malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
             strcpy(res, left.data.s);
@@ -698,20 +756,22 @@ static Value eval_call(AstNode* node, Environment* env) {
     char* full_name = nr_strdup(node->data.call.name);
     char* dot = strchr(full_name, '.');
     Value func_val = val_nil();
+    Value obj = val_nil();
     
     if (dot) {
         *dot = '\0';
         char* obj_name = full_name;
         char* field_name = dot + 1;
-        Value obj = val_nil();
         
         if (node->data.call.obj_slot != -1 && env->slots) {
             obj = env->slots[node->data.call.obj_slot];
         } else {
             obj = env_get(env, obj_name);
+            if (obj.type == VAL_NIL && strcmp(obj_name, "object") == 0) {
+                obj = val_obj(); // Dummy object to allow built-ins
+            }
         }
         
-        // Handle Array methods
         if (obj.type == VAL_ARR) {
             if (strcmp(field_name, "push") == 0) {
                 if (node->data.call.arg_count > 0) {
@@ -719,98 +779,60 @@ static Value eval_call(AstNode* node, Environment* env) {
                     if (val.type == VAL_RETURN) val = *val.data.return_val;
                     Array* arr = obj.data.arr;
                     if (arr->count >= arr->capacity) {
+                        int old_cap = arr->capacity;
                         arr->capacity *= 2;
-                        arr->elements = nr_realloc(arr->elements, sizeof(Value*) * (arr->capacity/2), sizeof(Value*) * arr->capacity);
+                        arr->elements = nr_realloc(arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * arr->capacity);
                     }
                     arr->elements[arr->count] = nr_malloc(sizeof(Value));
-
                     *arr->elements[arr->count] = val;
                     arr->count++;
-                    /* free(full_name); (arena managed) */
                     return val;
                 }
             } else if (strcmp(field_name, "pop") == 0) {
                 Array* arr = obj.data.arr;
                 if (arr->count > 0) {
                     arr->count--;
-                    Value v = *arr->elements[arr->count];
-                    // free(arr->elements[arr->count]); // Value might be used? Actually val_free handles it
-                    /* free(full_name); (arena managed) */
-                    return v;
+                    return *arr->elements[arr->count];
                 }
-                /* free(full_name); (arena managed) */
                 return val_nil();
             } else if (strcmp(field_name, "length") == 0) {
-                /* free(full_name); (arena managed) */
                 return val_int(obj.data.arr->count);
             }
         }
         
-        // Handle String methods
         if (obj.type == VAL_STR) {
-            if (strcmp(field_name, "length") == 0) {
-                /* free(full_name); (arena managed) */
-                return val_int(strlen(obj.data.s));
-            } else if (strcmp(field_name, "substring") == 0) {
-                if (node->data.call.arg_count >= 2) {
-                    Value start = eval(node->data.call.args[0], env);
-                    Value len = eval(node->data.call.args[1], env);
-                    if (start.type == VAL_RETURN) start = *start.data.return_val;
-                    if (len.type == VAL_RETURN) len = *len.data.return_val;
-                    
-                    if (start.type == VAL_INT && len.type == VAL_INT) {
-                        int slen = strlen(obj.data.s);
-                        int istart = start.data.i;
-                        int ilen = len.data.i;
-                        if (istart < 0) istart = 0;
-                        if (istart >= slen) { /* free(full_name); (arena managed) */ return val_str(nr_strdup("")); }
-                        if (istart + ilen > slen) ilen = slen - istart;
-                        char* sub = nr_malloc(ilen + 1);
+            if (strcmp(field_name, "length") == 0) return val_int(strlen(obj.data.s));
+        }
 
-                        strncpy(sub, obj.data.s + istart, ilen);
-                        sub[ilen] = 0;
-                        /* free(full_name); (arena managed) */
-                        return val_str(sub);
-                    }
+        if (strcmp(obj_name, "object") == 0) {
+            if (strcmp(field_name, "keys") == 0) {
+                Value arg = eval(node->data.call.args[0], env);
+                if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+                if (arg.type != VAL_OBJ) return val_arr();
+                Value res = val_arr();
+                for (int i=0; i<arg.data.obj->count; i++) {
+                    array_push(res.data.arr, val_str(nr_strdup(arg.data.obj->keys[i])));
                 }
+                return res;
+            } else if (strcmp(field_name, "values") == 0) {
+                Value arg = eval(node->data.call.args[0], env);
+                if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+                if (arg.type != VAL_OBJ) return val_arr();
+                Value res = val_arr();
+                for (int i=0; i<arg.data.obj->count; i++) {
+                    array_push(res.data.arr, *arg.data.obj->values[i]);
+                }
+                return res;
             }
         }
 
         func_val = get_dot_value(obj, field_name);
-        
-        if (func_val.type == VAL_FUNC || func_val.type == VAL_NIL) {
-            if (func_val.type == VAL_NIL) {
-                func_val = env_get_by_hash(env, field_name, node->data.call.hash);
-            }
-            
-            if (func_val.type == VAL_FUNC) {
-                AstNode* decl = func_val.data.func.decl;
-                Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
-                env_define(call_env, "self", obj);
-                
-                // Normal argument binding for methods
-                for (int i=0; i<node->data.call.arg_count && i < decl->data.func_decl.param_count; i++) {
-                    Value arg = EVAL_FAST(node->data.call.args[i], env);
-                    if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-                    if (call_env->slots && i < call_env->slot_count) {
-                        call_env->slots[i] = arg;
-                    } else {
-                        env_define(call_env, decl->data.func_decl.params[i], arg);
-                    }
-                }
-                Value res = EVAL_FAST(decl->data.func_decl.body, call_env);
-                /* free(full_name); (arena managed) */
-                env_free(call_env);
-                if (res.type == VAL_RETURN) return *res.data.return_val;
-                return res;
-            }
-        }
+        if (func_val.type == VAL_NIL) func_val = env_get_by_hash(env, field_name, node->data.call.hash);
     } else {
-        // Built-ins
         if (strcmp(full_name, "print") == 0 || strcmp(full_name, "println") == 0) {
             int is_println = strcmp(full_name, "println") == 0;
             for (int i=0; i<node->data.call.arg_count; i++) {
-                Value arg = EVAL_FAST(node->data.call.args[i], env);
+                Value arg = eval(node->data.call.args[i], env);
                 if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
                 if (arg.type == VAL_INT) printf("%lld", arg.data.i);
                 else if (arg.type == VAL_FLOAT) printf("%g", arg.data.f);
@@ -820,640 +842,79 @@ static Value eval_call(AstNode* node, Environment* env) {
                 else if (arg.type == VAL_ARR) printf("[Array]");
                 else if (arg.type == VAL_ERROR) printf("Error: %s", arg.data.s);
                 else printf("nil");
-                
                 if (i < node->data.call.arg_count - 1) printf(" ");
             }
             if (is_println) printf("\n");
             fflush(stdout);
             return val_nil();
         }
-        if (strcmp(full_name, "__builtin_args") == 0) {
-            extern int g_argc;
-            extern char** g_argv;
-            Value a = val_arr();
-            // Start from argv[2] (the script name) or argv[3] if there are more
-            // Actually, let's just return all of them after 'nira run script.nr'
-            int start = 2; // nira run script.nr arg1 arg2
-            for (int i = start; i < g_argc; i++) {
-                if (a.data.arr->count >= a.data.arr->capacity) {
-                    a.data.arr->capacity *= 2;
-                    a.data.arr->elements = nr_realloc(a.data.arr->elements, sizeof(Value*) * (a.data.arr->capacity/2), sizeof(Value*) * a.data.arr->capacity);
-                }
-                a.data.arr->elements[a.data.arr->count] = nr_malloc(sizeof(Value));
-                *a.data.arr->elements[a.data.arr->count] = val_str(g_argv[i]);
-                a.data.arr->count++;
-            }
-            /* free(full_name); (arena managed) */
-            return a;
-        }
-        if (strcmp(full_name, "__builtin_len") == 0) {
+        if (strcmp(full_name, "len") == 0) {
             Value arg = eval(node->data.call.args[0], env);
             if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-            int len = 0;
-            if (arg.type == VAL_ARR) len = arg.data.arr->count;
-            else if (arg.type == VAL_STR) len = strlen(arg.data.s);
-            return val_int(len);
+            if (arg.type == VAL_ARR) return val_int(arg.data.arr->count);
+            if (arg.type == VAL_STR) return val_int(strlen(arg.data.s));
+            if (arg.type == VAL_OBJ) return val_int(arg.data.obj->count);
+            return val_int(0);
         }
-        if (strcmp(full_name, "__builtin_file_write") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            Value content = eval(node->data.call.args[1], env);
-            if (path.type == VAL_STR && content.type == VAL_STR) {
-                if (!is_safe_path(path.data.s)) {
-                    report_runtime_error(node, env, "SECURITY", "Path traversal attempt detected");
-                }
-                FILE* f = fopen(path.data.s, "w");
-                if (f) {
-                    fputs(content.data.s, f);
-                    fclose(f);
-                }
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_file_read") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            Value res = val_nil();
-            if (path.type == VAL_STR) {
-                if (!is_safe_path(path.data.s)) {
-                    report_runtime_error(node, env, "SECURITY", "Path traversal attempt detected");
-                }
-                char* s = read_file_internal(path.data.s);
-                if (s) {
-                    res = val_str(s);
-                }
-            }
-            return res;
-        }
-        if (strcmp(full_name, "__builtin_exec") == 0) {
-            Value cmd = eval(node->data.call.args[0], env);
-            if (cmd.type == VAL_STR) {
-                system(cmd.data.s);
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_random") == 0) {
-            static int seeded = 0;
-            if (!seeded) { srand(time(NULL)); seeded = 1; }
-            return val_int(rand());
-        }
-        if (strcmp(full_name, "__builtin_time_now") == 0) {
-            return val_int((int)time(NULL));
-        }
-        if (strcmp(full_name, "__builtin_millis") == 0) {
-            struct timeval tv;
-            gettimeofday(&tv, NULL);
-            double res = (double)tv.tv_sec * 1000.0 + (double)tv.tv_usec / 1000.0;
-            return val_float(res);
-        }
-        if (strcmp(full_name, "__builtin_delay") == 0) {
-            Value ms = eval(node->data.call.args[0], env);
-            if (ms.type == VAL_INT) {
-                usleep(ms.data.i * 1000);
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_exit_proc") == 0) {
-            Value code = eval(node->data.call.args[0], env);
-            int c = (code.type == VAL_INT) ? code.data.i : 0;
-            exit(c);
-        }
-        // Math built-ins
-        if (strcmp(full_name, "__builtin_math_sqrt") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i;
-            return val_float(sqrt(d));
-        }
-        if (strcmp(full_name, "__builtin_math_pow") == 0) {
-            Value b = eval(node->data.call.args[0], env);
-            Value e = eval(node->data.call.args[1], env);
-            double db = (b.type == VAL_FLOAT) ? b.data.f : (double)b.data.i;
-            double de = (e.type == VAL_FLOAT) ? e.data.f : (double)e.data.i;
-            return val_float(pow(db, de));
-        }
-        if (strcmp(full_name, "__builtin_math_sin") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i;
-            return val_float(sin(d));
-        }
-        if (strcmp(full_name, "__builtin_math_cos") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i;
-            return val_float(cos(d));
-        }
-        // File I/O built-ins
-        if (strcmp(full_name, "__builtin_file_read") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            if (path.type != VAL_STR) return val_nil();
-            char* s = read_file_internal(path.data.s);
-            if (!s) return val_nil();
-            return val_str(s);
-        }
-        if (strcmp(full_name, "__builtin_file_write") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            Value content = eval(node->data.call.args[1], env);
-            if (path.type != VAL_STR || content.type != VAL_STR) return val_bool(0);
-            FILE* f = fopen(path.data.s, "w");
-            if (!f) return val_bool(0);
-            fputs(content.data.s, f);
-            fclose(f);
-            return val_bool(1);
-        }
-        if (strcmp(full_name, "__builtin_file_delete") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            if (path.type != VAL_STR) return val_bool(0);
-            return val_bool(remove(path.data.s) == 0);
-        }
-        if (strcmp(full_name, "__builtin_file_exists") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            int res = 0;
-            if (path.type == VAL_STR) {
-                struct stat buffer;
-                res = (stat(path.data.s, &buffer) == 0);
-            }
-            return val_bool(res);
-        }
-        if (strcmp(full_name, "__builtin_str_index_of") == 0) {
-            Value s = eval(node->data.call.args[0], env);
-            Value sub = eval(node->data.call.args[1], env);
-            int res = -1;
-            if (s.type == VAL_STR && sub.type == VAL_STR) {
-                char* p = strstr(s.data.s, sub.data.s);
-                if (p) res = (int)(p - s.data.s);
-            }
-            /* free(full_name); (arena managed) */
-            return val_int(res);
-        }
-        if (strcmp(full_name, "__builtin_str_replace") == 0) {
-            Value s = eval(node->data.call.args[0], env);
-            Value old = eval(node->data.call.args[1], env);
-            Value new_str = eval(node->data.call.args[2], env);
-            Value res = s;
-            if (s.type == VAL_STR && old.type == VAL_STR && new_str.type == VAL_STR) {
-                int oldlen = strlen(old.data.s);
-                if (oldlen > 0) {
-                    int count = 0;
-                    char *p = s.data.s;
-                    while ((p = strstr(p, old.data.s))) { count++; p += oldlen; }
-                    char* result = nr_malloc(strlen(s.data.s) + count * (strlen(new_str.data.s) - oldlen) + 1);
-                    char* d = result;
-                    p = s.data.s;
-                    while (*p) {
-                        if (strstr(p, old.data.s) == p) {
-                            strcpy(d, new_str.data.s);
-                            d += strlen(new_str.data.s);
-                            p += oldlen;
-                        } else *d++ = *p++;
-                    }
-                    *d = 0;
-                    res = val_str(result);
-                }
-            }
-            /* free(full_name); (arena managed) */
-            return res;
-        }
-        if (strcmp(full_name, "__builtin_str_match") == 0) {
-            Value s = eval(node->data.call.args[0], env);
-            Value regex_str = eval(node->data.call.args[1], env);
-            int res = 0;
-            if (s.type == VAL_STR && regex_str.type == VAL_STR) {
-                #include <regex.h>
-                regex_t regex;
-                if (regcomp(&regex, regex_str.data.s, REG_EXTENDED) == 0) {
-                    if (regexec(&regex, s.data.s, 0, NULL, 0) == 0) res = 1;
-                    regfree(&regex);
-                }
-            }
-            /* free(full_name); (arena managed) */
-            return val_bool(res);
-        }
-        if (strcmp(full_name, "__builtin_file_delete") == 0) {
-            Value path = eval(node->data.call.args[0], env);
-            if (path.type == VAL_STR) {
-                if (!is_safe_path(path.data.s)) {
-                    report_runtime_error(node, env, "SECURITY", "Path traversal attempt detected");
-                }
-                remove(path.data.s);
-            }
-            /* free(full_name); (arena managed) */
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_substring") == 0) {
-            Value s = eval(node->data.call.args[0], env);
-            Value start = eval(node->data.call.args[1], env);
-            Value len = eval(node->data.call.args[2], env);
-            if (s.type == VAL_STR && start.type == VAL_INT && len.type == VAL_INT) {
-                int slen = strlen(s.data.s);
-                int st = start.data.i;
-                int l = len.data.i;
-                if (st < 0) st = 0;
-                if (st > slen) st = slen;
-                if (st + l > slen) l = slen - st;
-                char* sub = nr_malloc(l + 1);
-                strncpy(sub, s.data.s + st, l);
-                sub[l] = '\0';
-                return val_str(sub);
-            }
-            /* free(full_name); (arena managed) */
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_push") == 0) {
-            Value arr = eval(node->data.call.args[0], env);
-            Value val = eval(node->data.call.args[1], env);
-            if (arr.type == VAL_ARR) {
-                if (arr.data.arr->count >= arr.data.arr->capacity) {
-                    int old_cap = arr.data.arr->capacity;
-                    arr.data.arr->capacity *= 2;
-                    arr.data.arr->elements = nr_realloc(arr.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * arr.data.arr->capacity);
-                }
-                arr.data.arr->elements[arr.data.arr->count] = nr_malloc(sizeof(Value));
-
-                *arr.data.arr->elements[arr.data.arr->count] = val;
-                arr.data.arr->count++;
-            }
-            /* free(full_name); (arena managed) */
-            return val;
-        }
-        if (strcmp(full_name, "__builtin_pop") == 0) {
-            Value arr = eval(node->data.call.args[0], env);
-            Value res = val_nil();
-            if (arr.type == VAL_ARR && arr.data.arr->count > 0) {
-                arr.data.arr->count--;
-                res = *arr.data.arr->elements[arr.data.arr->count];
-            }
-            /* free(full_name); (arena managed) */
-            return res;
-        }
-        if (strcmp(full_name, "__builtin_http_serve") == 0) {
-            Value port = eval(node->data.call.args[0], env);
-            Value callback = eval(node->data.call.args[1], env);
-            if (port.type == VAL_INT && callback.type == VAL_FUNC) {
-                int server_fd, new_socket;
-                struct sockaddr_in address;
-                int addrlen = sizeof(address);
-                server_fd = socket(AF_INET, SOCK_STREAM, 0);
-                int opt = 1;
-                setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-                address.sin_family = AF_INET;
-                address.sin_addr.s_addr = INADDR_ANY;
-                address.sin_port = htons(port.data.i);
-                if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-                    char err_msg[256];
-                    snprintf(err_msg, sizeof(err_msg), "Could not bind to port %lld: %s", port.data.i, strerror(errno));
-                    report_runtime_error(node, env, "NETWORK", err_msg);
-                    close(server_fd);
-                    /* free(full_name); (arena managed) */
-                    return val_nil();
-                }
-                if (listen(server_fd, 3) < 0) {
-                    report_runtime_error(node, env, "NETWORK", "Could not listen on port");
-                    close(server_fd);
-                    return val_nil();
-                }
-                printf("HTTP Server listening on port %lld...\n", port.data.i);
-                while(1) {
-                    ArenaBlock* checkpoint = nr_arena_checkpoint();
-                    new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
-                    if (new_socket < 0) {
-                        nr_arena_rollback(checkpoint);
-                        continue;
-                    }
-
-                    char buffer[4096] = {0};
-                    int bytes_read = read(new_socket, buffer, 4096);
-                    if (bytes_read <= 0) {
-                        close(new_socket);
-                        nr_arena_rollback(checkpoint);
-                        continue;
-                    }
-                    
-                    // Simple parse
-                    char method[16] = {0}, path[1024] = {0};
-                    if (sscanf(buffer, "%15s %1023s", method, path) < 2) {
-                        close(new_socket);
-                        nr_arena_rollback(checkpoint);
-                        continue;
-                    }
-
-                    Value req = val_obj();
-                    eval_set_field(req.data.obj, "method", val_str(nr_strdup(method)));
-                    eval_set_field(req.data.obj, "path", val_str(nr_strdup(path)));
-                    
-                    char* body_ptr = strstr(buffer, "\r\n\r\n");
-                    if (body_ptr) {
-                        body_ptr += 4;
-                        eval_set_field(req.data.obj, "body", val_str(nr_strdup(body_ptr)));
-                    } else {
-                        eval_set_field(req.data.obj, "body", val_nil());
-                    }
-                    
-                    // Call Nira serve function
-                    Environment* call_env = env_new(callback.data.func.closure, callback.data.func.decl->data.func_decl.local_count);
-                    env_define(call_env, "req", req);
-                    Value res = eval(callback.data.func.decl->data.func_decl.body, call_env);
-                    if (res.type == VAL_RETURN) res = *res.data.return_val;
-                    
-                    char* body = "Not Found";
-                    int status = 404;
-                    char headers_str[1024] = {0};
-                    if (res.type == VAL_OBJ) {
-                        Value s = get_dot_value(res, "status");
-                        if (s.type == VAL_INT) status = s.data.i;
-                        Value b = get_dot_value(res, "body");
-                        if (b.type == VAL_STR) body = b.data.s;
-                        
-                        Value h = get_dot_value(res, "headers");
-                        if (h.type == VAL_OBJ) {
-                            for (int i=0; i<h.data.obj->count; i++) {
-                                char line[256];
-                                Value* hv = h.data.obj->values[i];
-                                char* hs = "";
-                                if (hv->type == VAL_STR) hs = hv->data.s;
-                                else if (hv->type == VAL_INT) { snprintf(line, sizeof(line), "%lld", hv->data.i); hs = nr_strdup(line); }
-                                
-                                snprintf(line, sizeof(line), "%s: %s\r\n", h.data.obj->keys[i], hs);
-                                if (strlen(headers_str) + strlen(line) < sizeof(headers_str) - 1) {
-                                    strncat(headers_str, line, sizeof(headers_str) - strlen(headers_str) - 1);
-                                }
-                            }
-                        }
-                    }
-                    
-                    char resp[8192];
-                    snprintf(resp, sizeof(resp), "HTTP/1.1 %d OK\r\n%sContent-Length: %zu\r\n\r\n%s", status, headers_str, strlen(body), body);
-                    send(new_socket, resp, strlen(resp), 0);
-                    close(new_socket);
-                    nr_arena_rollback(checkpoint);
-                }
-            }
-            /* free(full_name); (arena managed) */
-            return val_nil();
-        }
-        if (strncmp(full_name, "__native_", 9) == 0) {
-            // Find in dl_handles
-            Value (*native_func)(Value, Value, Value, Value, Value, Value) = NULL;
-            for (int i=0; i<dl_handle_count; i++) {
-                native_func = (Value (*)(Value, Value, Value, Value, Value, Value))dlsym(dl_handles[i], full_name);
-                if (native_func) break;
-            }
-            if (native_func) {
-                Value args[6] = { val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil() };
-                for (int i=0; i<node->data.call.arg_count && i<6; i++) {
-                    Value arg = EVAL_FAST(node->data.call.args[i], env);
-                    if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-                    args[i] = arg;
-                }
-                Value res = native_func(args[0], args[1], args[2], args[3], args[4], args[5]);
-                /* free(full_name); (arena managed) */
-                return res;
-            } else {
-                char buf[256];
-                snprintf(buf, sizeof(buf), "Native function '%s' not found in loaded dynamic libraries", full_name);
-                report_runtime_error(node, env, "FFI", buf);
-                /* free(full_name); (arena managed) */
-                return val_nil();
+        if (strcmp(full_name, "typeof") == 0) {
+            Value arg = eval(node->data.call.args[0], env);
+            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+            switch (arg.type) {
+                case VAL_NIL: return val_str("null");
+                case VAL_INT: return val_str("int");
+                case VAL_FLOAT: return val_str("float");
+                case VAL_STR: return val_str("string");
+                case VAL_BOOL: return val_str("bool");
+                case VAL_OBJ: return val_str("object");
+                case VAL_ARR: return val_str("array");
+                case VAL_FUNC: return val_str("function");
+                default: return val_str("unknown");
             }
         }
-        if (strcmp(full_name, "toInt") == 0 || strcmp(full_name, "__builtin_conv_to_int") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            long long res = 0;
-            if (v.type == VAL_INT) res = v.data.i;
-            else if (v.type == VAL_FLOAT) res = (long long)v.data.f;
-            else if (v.type == VAL_STR) {
-                if (node->data.call.arg_count > 1) {
-                    Value base = eval(node->data.call.args[1], env);
-                    res = strtoll(v.data.s, NULL, (base.type == VAL_INT) ? (int)base.data.i : 10);
-                } else {
-                    res = atoll(v.data.s);
-                }
-            }
-            return val_int(res);
-        }
-        if (strcmp(full_name, "toFloat") == 0 || strcmp(full_name, "__builtin_conv_to_float") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            double res = 0;
-            if (v.type == VAL_INT) res = (double)v.data.i;
-            else if (v.type == VAL_FLOAT) res = v.data.f;
-            else if (v.type == VAL_STR) res = atof(v.data.s);
-            return val_float(res);
-        }
-        if (strcmp(full_name, "toString") == 0 || strcmp(full_name, "__builtin_conv_to_str") == 0) {
+        if (strcmp(full_name, "toString") == 0) {
             Value v = eval(node->data.call.args[0], env);
             if (v.type == VAL_RETURN) v = *v.data.return_val;
             char buf[128];
-            if (v.type == VAL_INT) {
-                snprintf(buf, sizeof(buf), "%lld", v.data.i);
-                return val_str(nr_strdup(buf));
-            } else if (v.type == VAL_FLOAT) {
-                snprintf(buf, sizeof(buf), "%g", v.data.f);
-                return val_str(nr_strdup(buf));
-            } else if (v.type == VAL_BOOL) {
-                return val_str(nr_strdup(v.data.i ? "true" : "false"));
-            } else if (v.type == VAL_STR) {
-                return v;
-            } else if (v.type == VAL_NIL) {
-                return val_str(nr_strdup("nil"));
-            } else if (v.type == VAL_ARR) {
-                return val_str(nr_strdup("[Array]"));
-            }
-            return val_str(nr_strdup("[Object]"));
+            if (v.type == VAL_INT) { snprintf(buf, sizeof(buf), "%lld", v.data.i); return val_str(nr_strdup(buf)); }
+            if (v.type == VAL_FLOAT) { snprintf(buf, sizeof(buf), "%g", v.data.f); return val_str(nr_strdup(buf)); }
+            if (v.type == VAL_BOOL) return val_str(nr_strdup(v.data.i ? "true" : "false"));
+            if (v.type == VAL_STR) return v;
+            if (v.type == VAL_NIL) return val_str(nr_strdup("nil"));
+            if (v.type == VAL_OBJ) return val_str(nr_strdup("[Object]"));
+            if (v.type == VAL_ARR) return val_str(nr_strdup("[Array]"));
+            return val_str(nr_strdup("[Value]"));
         }
-        if (strcmp(full_name, "toBool") == 0 || strcmp(full_name, "__builtin_conv_to_bool") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            int res = 0;
-            if (v.type == VAL_BOOL) res = (int)v.data.i;
-            else if (v.type == VAL_INT) res = (v.data.i != 0);
-            else if (v.type == VAL_STR) res = (strlen(v.data.s) > 0);
-            else if (v.type != VAL_NIL) res = 1;
-            return val_bool(res);
-        }
-        if (strcmp(full_name, "__builtin_parse_int") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            if (v.type == VAL_STR) return val_int(atoll(v.data.s));
-            return val_int(0);
-        }
-        if (strcmp(full_name, "__builtin_parse_float") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            if (v.type == VAL_STR) return val_float(atof(v.data.s));
-            return val_float(0.0);
-        }
-        if (strcmp(full_name, "__builtin_parse_bool") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            if (v.type == VAL_STR) {
-                if (strcmp(v.data.s, "true") == 0 || strcmp(v.data.s, "1") == 0) return val_bool(1);
-            }
-            return val_bool(0);
-        }
-        if (strcmp(full_name, "__builtin_obj_keys") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            Value a = val_arr();
-            if (v.type == VAL_OBJ) {
-                for (int i=0; i<v.data.obj->count; i++) {
-                    if (a.data.arr->count >= a.data.arr->capacity) {
-                        int old_cap = a.data.arr->capacity;
-                        a.data.arr->capacity *= 2;
-                        a.data.arr->elements = nr_realloc(a.data.arr->elements, sizeof(Value*) * old_cap, sizeof(Value*) * a.data.arr->capacity);
-                    }
-                    a.data.arr->elements[a.data.arr->count] = nr_malloc(sizeof(Value));
-                    *a.data.arr->elements[a.data.arr->count] = val_str(v.data.obj->keys[i]);
-                    a.data.arr->count++;
-                }
-            }
-            return a;
-        }
-        if (strcmp(full_name, "len") == 0 || strcmp(full_name, "__builtin_len") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            int res = 0;
-            if (v.type == VAL_STR) res = strlen(v.data.s);
-            else if (v.type == VAL_ARR) res = v.data.arr->count;
-            else if (v.type == VAL_OBJ) res = v.data.obj->count;
-            /* free(full_name); (arena managed) */
-            return val_int(res);
-        }
-        if (strcmp(full_name, "__builtin_json_encode") == 0 || strcmp(full_name, "json_encode") == 0 || strcmp(full_name, "__builtin_json_stringify") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            char* s = val_to_json_internal(v);
-            return val_str(s);
-        }
-        if (strcmp(full_name, "__builtin_json_decode") == 0 || strcmp(full_name, "json_decode") == 0 || strcmp(full_name, "__builtin_json_parse") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_RETURN) v = *v.data.return_val;
-            if (v.type != VAL_STR) return val_nil();
-            
-            char* p = v.data.s; 
-            while(*p == ' ' || *p == '[' || *p == ']') p++;
-            if (*p == '{') {
-                Value obj = val_obj(); p++;
-                while(*p && *p != '}') {
-                    while(*p == ' ' || *p == '"' || *p == ',') p++;
-                    char key[64]; int i=0; while(*p && *p != '"') key[i++] = *p++; key[i] = 0; p++;
-                    while(*p == ' ' || *p == ':') p++;
-                    if (*p == '"') { 
-                        p++; char val[256]; int j=0; while(*p && *p != '"') val[j++] = *p++; val[j] = 0; p++; 
-                        eval_set_field(obj.data.obj, key, val_str(nr_strdup(val))); 
-                    } else { 
-                        char val[32]; int j=0; while(*p && *p != ',' && *p != ' ' && *p != '}') val[j++] = *p++; val[j] = 0; 
-                        eval_set_field(obj.data.obj, key, val_int(atoi(val))); 
-                    }
-                }
-                return obj;
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_encoding_to_base64") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_STR) {
-                extern char* base64_encode(const unsigned char* data, size_t input_length);
-                return val_str(base64_encode((const unsigned char*)v.data.s, strlen(v.data.s)));
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_encoding_from_base64") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_STR) {
-                extern unsigned char* base64_decode(const char* data, size_t input_length, size_t* output_length);
-                size_t out_len;
-                unsigned char* decoded = base64_decode(v.data.s, strlen(v.data.s), &out_len);
-                if (decoded) return val_str((char*)decoded);
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_encoding_to_hex") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_INT) {
-                char buf[32]; snprintf(buf, sizeof(buf), "0x%llx", v.data.i);
-                return val_str(nr_strdup(buf));
-            } else if (v.type == VAL_STR) {
-                char* res = nr_malloc(strlen(v.data.s) * 2 + 1);
-                for (size_t i = 0; i < strlen(v.data.s); i++) sprintf(res + i*2, "%02x", (unsigned char)v.data.s[i]);
-                return val_str(res);
-            }
-            return val_nil();
-        }
-        if (strcmp(full_name, "__builtin_time_to_unix") == 0) {
-            Value v = eval(node->data.call.args[0], env);
-            if (v.type == VAL_OBJ) {
-                struct tm t = {0};
-                t.tm_year = (int)get_dot_value(v, "year").data.i - 1900;
-                t.tm_mon = (int)get_dot_value(v, "month").data.i - 1;
-                t.tm_mday = (int)get_dot_value(v, "day").data.i;
-                return val_int((long long)mktime(&t));
-            }
-            return val_int((long long)time(NULL));
-        }
-    }
-    
-    if (node->data.call.cached_decl) {
-        func_val = val_func(node->data.call.cached_decl, env);
-        // Find the global environment for the closure if it's a top-level func
-        Environment* root = env;
-        while (root->parent) root = root->parent;
-        func_val.data.func.closure = root;
-    } else {
-        func_val = env_get(env, full_name);
-        if (func_val.type == VAL_FUNC && !strchr(full_name, '.')) {
-            node->data.call.cached_decl = func_val.data.func.decl;
+        
+        if (node->data.call.cached_decl) {
+            func_val = val_func(node->data.call.cached_decl, env);
+            Environment* root = env; while (root->parent) root = root->parent;
+            func_val.data.func.closure = root;
+        } else {
+            func_val = env_get(env, full_name);
+            if (func_val.type == VAL_FUNC) node->data.call.cached_decl = func_val.data.func.decl;
         }
     }
 
-    if (func_val.type != VAL_FUNC) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "'%s' is not a function", node->data.call.name);
-        report_runtime_error(node, env, "TYPE", buf);
-    }
-
-    AstNode* decl = func_val.data.func.decl;
-    Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
-
-    // Bind arguments
-    if (decl->data.func_decl.is_unpacking) {
-        Value data = eval(node->data.call.args[0], env);
-        if (data.type == VAL_RETURN) data = *data.data.return_val;
-        for (int i=0; i<decl->data.func_decl.param_count; i++) {
-            char* key = decl->data.func_decl.params[i];
-            Value val = val_nil();
-            if (data.type == VAL_OBJ) {
-                for (int j=0; j<data.data.obj->count; j++) {
-                    if (strcmp(data.data.obj->keys[j], key) == 0) {
-                        val = *data.data.obj->values[j];
-                        break;
-                    }
-                }
-            }
-            if (call_env->slots && i < call_env->slot_count) {
-                call_env->slots[i] = val;
-            } else {
-                env_define(call_env, key, val);
-            }
-        }
-    } else {
-        for (int i=0; i<node->data.call.arg_count && i<decl->data.func_decl.param_count; i++) {
-            Value arg = EVAL_FAST(node->data.call.args[i], env);
+    if (func_val.type == VAL_FUNC) {
+        AstNode* decl = func_val.data.func.decl;
+        Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
+        if (obj.type != VAL_NIL) env_define(call_env, "self", obj);
+        for (int i=0; i<node->data.call.arg_count && i < decl->data.func_decl.param_count; i++) {
+            Value arg = eval(node->data.call.args[i], env);
             if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-            
-            if (call_env->slots && i < call_env->slot_count) {
-                call_env->slots[i] = arg;
-            } else {
-                env_define(call_env, decl->data.func_decl.params[i], arg);
-            }
+            if (call_env->slots && i < call_env->slot_count) call_env->slots[i] = arg;
+            else env_define(call_env, decl->data.func_decl.params[i], arg);
         }
+        Value res = eval(decl->data.func_decl.body, call_env);
+        env_free(call_env);
+        if (res.type == VAL_RETURN) return *res.data.return_val;
+        return res;
     }
 
-    Value result = eval(decl->data.func_decl.body, call_env);
-    /* free(full_name); (arena managed) */
-    env_free(call_env); // Return to pool
-    if (result.type == VAL_RETURN) return *result.data.return_val;
-    return result;
+    char err_buf[256];
+    snprintf(err_buf, sizeof(err_buf), "'%s' is not a function", node->data.call.name);
+    report_runtime_error(node, env, "TYPE", err_buf);
+    return val_nil();
 }
 
 Value eval(AstNode* node, Environment* env) {
@@ -1619,6 +1080,33 @@ Value eval(AstNode* node, Environment* env) {
                 }
             } else right = val_nil();
 
+            if (op == OP_EQ) {
+                if (left.type != right.type) return val_bool(0);
+                switch (left.type) {
+                    case VAL_NIL: return val_bool(1);
+                    case VAL_INT: return val_bool(left.data.i == right.data.i);
+                    case VAL_FLOAT: return val_bool(left.data.f == right.data.f);
+                    case VAL_STR: return val_bool(strcmp(left.data.s, right.data.s) == 0);
+                    case VAL_BOOL: return val_bool(left.data.i == right.data.i);
+                    case VAL_OBJ: return val_bool(left.data.obj == right.data.obj);
+                    case VAL_ARR: return val_bool(left.data.arr == right.data.arr);
+                    default: return val_bool(0);
+                }
+            }
+            if (op == OP_NEQ) {
+                if (left.type != right.type) return val_bool(1);
+                switch (left.type) {
+                    case VAL_NIL: return val_bool(0);
+                    case VAL_INT: return val_bool(left.data.i != right.data.i);
+                    case VAL_FLOAT: return val_bool(left.data.f != right.data.f);
+                    case VAL_STR: return val_bool(strcmp(left.data.s, right.data.s) != 0);
+                    case VAL_BOOL: return val_bool(left.data.i != right.data.i);
+                    case VAL_OBJ: return val_bool(left.data.obj != right.data.obj);
+                    case VAL_ARR: return val_bool(left.data.arr != right.data.arr);
+                    default: return val_bool(1);
+                }
+            }
+
             if ((left.type == VAL_INT || left.type == VAL_FLOAT) && (right.type == VAL_INT || right.type == VAL_FLOAT)) {
                 double l = (left.type == VAL_FLOAT) ? left.data.f : (double)left.data.i;
                 double r = (right.type == VAL_FLOAT) ? right.data.f : (double)right.data.i;
@@ -1630,7 +1118,6 @@ Value eval(AstNode* node, Environment* env) {
                         case OP_DIV: if (r == 0) report_runtime_error(node, env, "MATH", "Division by zero"); return val_float(l / r);
                         case OP_LT:  return val_bool(l < r);
                         case OP_GT:  return val_bool(l > r);
-                        case OP_EQ:  return val_bool(l == r);
                         default: break;
                     }
                 } else {
@@ -1641,8 +1128,6 @@ Value eval(AstNode* node, Environment* env) {
                         case OP_MUL: return (Value){.type = VAL_INT, .data.i = il * ir};
                         case OP_LT:  return (Value){.type = VAL_BOOL, .data.i = il < ir};
                         case OP_GT:  return (Value){.type = VAL_BOOL, .data.i = il > ir};
-                        case OP_EQ:  return (Value){.type = VAL_BOOL, .data.i = il == ir};
-                        case OP_NEQ: return (Value){.type = VAL_BOOL, .data.i = il != ir};
                         case OP_LE:  return (Value){.type = VAL_BOOL, .data.i = il <= ir};
                         case OP_GE:  return (Value){.type = VAL_BOOL, .data.i = il >= ir};
                         case OP_DIV: if (ir == 0) report_runtime_error(node, env, "MATH", "Division by zero"); return (Value){.type = VAL_INT, .data.i = il / ir};
@@ -1651,24 +1136,11 @@ Value eval(AstNode* node, Environment* env) {
                 }
             }
             if (left.type == VAL_STR && op == OP_ADD && right.type == VAL_STR) {
-                int len_l = left.length;
-                int len_r = right.length;
-                char* sl = left.data.s;
-                char* sr = right.data.s;
-                int old_alloc_size = (len_l + 1 + 7) & ~7;
-                int new_alloc_size = (len_l + len_r + 1 + 7) & ~7;
-                Arena* a = global_arena;
-                if (a && (char*)a->current == sl + old_alloc_size) {
-                    if (a->current + (new_alloc_size - old_alloc_size) <= a->heap_end) {
-                        memcpy(sl + len_l, sr, len_r);
-                        sl[len_l + len_r] = '\0';
-                        a->current += (new_alloc_size - old_alloc_size);
-                        return (Value){.type = VAL_STR, .length = len_l + len_r, .data.s = sl};
-                    }
-                }
+                int len_l = strlen(left.data.s);
+                int len_r = strlen(right.data.s);
                 char* res = nr_malloc(len_l + len_r + 1);
-                memcpy(res, sl, len_l);
-                memcpy(res + len_l, sr, len_r);
+                memcpy(res, left.data.s, len_l);
+                memcpy(res + len_l, right.data.s, len_r);
                 res[len_l + len_r] = '\0';
                 return (Value){.type = VAL_STR, .length = len_l + len_r, .data.s = res};
             }
@@ -1676,39 +1148,14 @@ Value eval(AstNode* node, Environment* env) {
         }
         case AST_CALL:
         do_call:
+            return eval_call(node, env);
+
+        case AST_ERROR:
+        do_error:
         {
-            if (!node->data.call.name) return val_nil();
-            char* full_name = node->data.call.name; // Don't strdup unless needed
-            Value func_val = val_nil();
-            
-            if (strchr(full_name, '.')) {
-                // Keep the old eval_call logic for dot calls for now to keep eval() readable
-                return eval_call(node, env); 
-            }
-            
-            if (node->data.call.cached_decl) {
-                func_val = val_func(node->data.call.cached_decl, env);
-                Environment* root = env; while (root->parent) root = root->parent;
-                func_val.data.func.closure = root;
-            } else {
-                func_val = env_get(env, full_name);
-                if (func_val.type == VAL_FUNC) node->data.call.cached_decl = func_val.data.func.decl;
-            }
-
-            if (func_val.type != VAL_FUNC) return eval_call(node, env); // Fallback to full eval_call for built-ins
-
-            AstNode* decl = func_val.data.func.decl;
-            Environment* call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
-            for (int i=0; i<node->data.call.arg_count && i<decl->data.func_decl.param_count; i++) {
-                Value arg = EVAL_FAST(node->data.call.args[i], env);
-                if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-                if (call_env->slots && i < call_env->slot_count) call_env->slots[i] = arg;
-                else env_define(call_env, decl->data.func_decl.params[i], arg);
-            }
-            Value result = eval(decl->data.func_decl.body, call_env);
-            env_free(call_env);
-            if (result.type == VAL_RETURN) return *result.data.return_val;
-            return result;
+            Value msg = eval(node->data.error_expr.message, env);
+            if (msg.type == VAL_RETURN) msg = *msg.data.return_val;
+            return val_error(msg.type == VAL_STR ? msg.data.s : "error");
         }
         case AST_RETURN:
         do_return:
@@ -1753,13 +1200,6 @@ Value eval(AstNode* node, Environment* env) {
         case AST_PASS:
         do_pass:
             return val_nil();
-        case AST_ERROR:
-        do_error:
-        {
-            Value msg = eval(node->data.error_expr.message, env);
-            if (msg.type == VAL_RETURN) msg = *msg.data.return_val;
-            return val_error(msg.type == VAL_STR ? msg.data.s : "error");
-        }
         case AST_FOR:
         do_for:
         {
@@ -1768,7 +1208,11 @@ Value eval(AstNode* node, Environment* env) {
             if (iter.type != VAL_ARR) report_runtime_error(node, env, "TYPE", "Cannot iterate over non-array");
             char* var_name = node->data.for_stmt.alias ? node->data.for_stmt.alias : node->data.for_stmt.var;
             for (int i=0; i<iter.data.arr->count; i++) {
-                env_define(env, var_name, *iter.data.arr->elements[i]);
+                if (node->data.for_stmt.slot != -1 && env->slots) {
+                    env->slots[node->data.for_stmt.slot] = *iter.data.arr->elements[i];
+                } else {
+                    env_define(env, var_name, *iter.data.arr->elements[i]);
+                }
                 Value res = eval(node->data.for_stmt.body, env);
                 if (res.type == VAL_RETURN) return res;
                 if (res.type == VAL_BREAK) break;

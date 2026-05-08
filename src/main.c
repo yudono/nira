@@ -360,7 +360,6 @@ void dump_ast(AstNode *node, int indent) {
 
   switch (node->type) {
   case AST_PROGRAM:
-    printf("Program:\n");
     for (int i = 0; i < node->data.program.count; i++) {
       dump_ast(node->data.program.statements[i], indent + 1);
     }

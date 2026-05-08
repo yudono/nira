@@ -139,13 +139,17 @@ static AstNode* parse_statement(Parser* p);
 typedef struct { const char* name; int slot; } ParserLocal;
 static ParserLocal parser_locals[256];
 static int parser_local_count = 0;
+static int max_local_count = 0;
 
 static void resolve_node_locals(AstNode* node) {
     if (!node) return;
+    if (parser_local_count > max_local_count) max_local_count = parser_local_count;
+    
     switch (node->type) {
         case AST_VAR_REF:
             for (int i=0; i<parser_local_count; i++) {
-                if (strcmp(parser_locals[i].name, node->data.var_ref.name) == 0) {
+                if (parser_locals[i].name && node->data.var_ref.name && 
+                    strcmp(parser_locals[i].name, node->data.var_ref.name) == 0) {
                     node->data.var_ref.slot = parser_locals[i].slot;
                     return;
                 }
@@ -154,7 +158,8 @@ static void resolve_node_locals(AstNode* node) {
         case AST_ASSIGN:
             resolve_node_locals(node->data.assign.value);
             for (int i=0; i<parser_local_count; i++) {
-                if (strcmp(parser_locals[i].name, node->data.assign.target) == 0) {
+                if (parser_locals[i].name && node->data.assign.target &&
+                    strcmp(parser_locals[i].name, node->data.assign.target) == 0) {
                     node->data.assign.slot = parser_locals[i].slot;
                     return;
                 }
@@ -162,16 +167,35 @@ static void resolve_node_locals(AstNode* node) {
             if (parser_local_count < 256) {
                 parser_locals[parser_local_count].name = node->data.assign.target;
                 parser_locals[parser_local_count].slot = parser_local_count;
-                node->data.assign.slot = parser_local_count++;
+                node->data.assign.slot = parser_local_count;
+                parser_local_count++;
+                if (parser_local_count > max_local_count) max_local_count = parser_local_count;
             }
             break;
         case AST_BINARY:
             resolve_node_locals(node->data.binary.left);
             resolve_node_locals(node->data.binary.right);
             break;
-        case AST_CALL:
+        case AST_CALL: {
+            char* dot = strchr(node->data.call.name, '.');
+            if (dot) {
+                int len = dot - node->data.call.name;
+                char base[64];
+                if (len < 63) {
+                    strncpy(base, node->data.call.name, len);
+                    base[len] = '\0';
+                    node->data.call.obj_slot = -1;
+                    for (int i=0; i<parser_local_count; i++) {
+                        if (parser_locals[i].name && strcmp(parser_locals[i].name, base) == 0) {
+                            node->data.call.obj_slot = parser_locals[i].slot;
+                            break;
+                        }
+                    }
+                }
+            }
             for (int i=0; i<node->data.call.arg_count; i++) resolve_node_locals(node->data.call.args[i]);
             break;
+        }
         case AST_IF:
             resolve_node_locals(node->data.if_stmt.condition);
             resolve_node_locals(node->data.if_stmt.then_branch);
@@ -181,17 +205,50 @@ static void resolve_node_locals(AstNode* node) {
             resolve_node_locals(node->data.while_stmt.condition);
             resolve_node_locals(node->data.while_stmt.body);
             break;
-        case AST_FOR:
+        case AST_FOR: {
+            int old_count = parser_local_count;
             // Add loop var as local
             if (parser_local_count < 256) {
-                parser_locals[parser_local_count].name = node->data.for_stmt.var;
-                parser_locals[parser_local_count].slot = parser_local_count++;
+                char* var_name = node->data.for_stmt.alias ? node->data.for_stmt.alias : node->data.for_stmt.var;
+                parser_locals[parser_local_count].name = var_name;
+                parser_locals[parser_local_count].slot = parser_local_count;
+                node->data.for_stmt.slot = parser_local_count;
+                parser_local_count++;
+                if (parser_local_count > max_local_count) max_local_count = parser_local_count;
             }
             resolve_node_locals(node->data.for_stmt.iterable);
             resolve_node_locals(node->data.for_stmt.body);
+            parser_local_count = old_count;
             break;
+        }
         case AST_RETURN:
             resolve_node_locals(node->data.ret.value);
+            break;
+        case AST_OBJECT: {
+            AstField* f = node->data.object.fields;
+            while (f) {
+                resolve_node_locals(f->value);
+                f = f->next;
+            }
+            break;
+        }
+        case AST_ARRAY:
+            for (int i=0; i<node->data.array.count; i++) resolve_node_locals(node->data.array.elements[i]);
+            break;
+        case AST_INDEX:
+            resolve_node_locals(node->data.index.object);
+            resolve_node_locals(node->data.index.index);
+            break;
+        case AST_INDEX_ASSIGN:
+            resolve_node_locals(node->data.index_assign.object);
+            resolve_node_locals(node->data.index_assign.index);
+            resolve_node_locals(node->data.index_assign.value);
+            break;
+        case AST_DESTRUCTURING:
+            resolve_node_locals(node->data.destruct.value);
+            break;
+        case AST_ERROR:
+            resolve_node_locals(node->data.error_expr.message);
             break;
         case AST_PROGRAM:
             for (int i=0; i<node->data.program.count; i++) resolve_node_locals(node->data.program.statements[i]);
@@ -201,14 +258,18 @@ static void resolve_node_locals(AstNode* node) {
 }
 
 static void finalize_func_locals(AstNode* func) {
+    if (!func) return;
     parser_local_count = 0;
+    max_local_count = 0;
     // Parameters are the first locals
     for (int i=0; i<func->data.func_decl.param_count; i++) {
         parser_locals[parser_local_count].name = func->data.func_decl.params[i];
-        parser_locals[parser_local_count].slot = parser_local_count++;
+        parser_locals[parser_local_count].slot = parser_local_count;
+        parser_local_count++;
     }
+    if (parser_local_count > max_local_count) max_local_count = parser_local_count;
     resolve_node_locals(func->data.func_decl.body);
-    func->data.func_decl.local_count = parser_local_count;
+    func->data.func_decl.local_count = max_local_count;
 }
 
 
@@ -409,19 +470,33 @@ static AstNode* parse_primary(Parser* p) {
         while (1) {
             if (match(p, TOKEN_DOT)) {
                 consume(p, TOKEN_IDENT, "Expect identifier after '.'");
-                if (node->type == AST_VAR_REF) {
-                    int old_len = strlen(node->data.var_ref.name);
-                    int add_len = p->previous.length + 1;
-                    node->data.var_ref.name = nr_realloc(node->data.var_ref.name, old_len + 1, old_len + add_len + 1);
-                    strcat(node->data.var_ref.name, ".");
-                    strncat(node->data.var_ref.name, p->previous.text, p->previous.length);
-                    node->data.var_ref.hash = hash_key(node->data.var_ref.name);
+                char* field_name = copy_token_text(p->previous);
+                
+                if (check(p, TOKEN_LPAREN)) {
+                    // It's likely a method call. For now, keep it as a dotted name in a VAR_REF 
+                    // so that AST_CALL can pick it up.
+                    if (node->type == AST_VAR_REF) {
+                        int old_len = strlen(node->data.var_ref.name);
+                        int add_len = strlen(field_name) + 1;
+                        node->data.var_ref.name = nr_realloc(node->data.var_ref.name, old_len + 1, old_len + add_len + 1);
+                        strcat(node->data.var_ref.name, ".");
+                        strcat(node->data.var_ref.name, field_name);
+                        node->data.var_ref.hash = hash_key(node->data.var_ref.name);
+                    } else {
+                        // Complex base, e.g., getObj().method()
+                        AstNode* index_node = ast_new(AST_INDEX, p->current);
+                        index_node->data.index.object = node;
+                        AstNode* str_node = ast_new(AST_LITERAL_STR, p->current);
+                        str_node->data.str_val = field_name;
+                        index_node->data.index.index = str_node;
+                        node = index_node;
+                    }
                 } else {
-                    // It's an AST_INDEX followed by a DOT. We can treat it as another AST_INDEX where index is a string literal!
+                    // Normal property access
                     AstNode* index_node = ast_new(AST_INDEX, p->current);
                     index_node->data.index.object = node;
                     AstNode* str_node = ast_new(AST_LITERAL_STR, p->current);
-                    str_node->data.str_val = copy_token_text(p->previous);
+                    str_node->data.str_val = field_name;
                     index_node->data.index.index = str_node;
                     node = index_node;
                 }

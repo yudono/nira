@@ -127,6 +127,7 @@ typedef struct AstNode {
             char* alias; // For 'for item as alias in items'
             struct AstNode* iterable;
             struct AstNode* body;
+            int slot; // [NEW]
         } for_stmt;
 
         // Array
