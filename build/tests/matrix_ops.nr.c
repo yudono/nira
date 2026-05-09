@@ -14,13 +14,13 @@
 int nr_argc; char** nr_argv;
 typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_FLOAT, VAL_ERROR } ValueType;
 typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;
-void* nr_alloc(size_t sz) { sz = (sz + 7) & ~7; void* p = nr_arena->current; nr_arena->current += sz; return p; }
+void* nr_alloc(size_t sz) { return calloc(1, sz); }
 struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value* elements; int count; int capacity; }* arr; struct { char** keys; struct Value* values; int count; int capacity; }* obj; } data; } Value;
 #define val_nil() ((Value){.type = VAL_NIL})
 #define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})
 #define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})
 #define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})
-#define val_str(str) val_str_len(str, strlen(str))
+#define val_str(str) val_str_len(str, (str) ? strlen(str) : 0)
 #define val_func(ptr) ((Value){.type = VAL_FUNC, .data.func_ptr = (void*)(ptr)})
 #define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))
 Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value)*16); return v; }
@@ -71,6 +71,10 @@ void nr_time_init() {}
 Value nr_rt_now(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(time(NULL)); }
 Value nr_rt_millis(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return val_int(ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL); }
 Value nr_rt_sqrt(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { double d = (v.type == VAL_FLOAT) ? v.data.f : (double)v.data.i; return (Value){.type = VAL_FLOAT, .data.f = sqrt(d)}; }
+Value nr_rt_max(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av>bv)?av:bv}; } return val_int((a.data.i>b.data.i)?a.data.i:b.data.i); }
+Value nr_rt_min(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av<bv)?av:bv}; } return val_int((a.data.i<b.data.i)?a.data.i:b.data.i); }
+Value nr_rt_abs(Value self, Value n, Value _v1, Value _v2, Value _v3, Value _v4) { if(n.type==VAL_FLOAT) return (Value){.type=VAL_FLOAT,.data.f=fabs(n.data.f)}; return val_int(llabs(n.data.i)); }
+Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], source.data.obj->values[i]); return target; }
 Value nr_rt_random(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(rand()); }
 Value nr_rt_to_int(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type==VAL_INT) return v; if(v.type==VAL_STR) return val_int(atoll(v.data.s)); return val_int(0); }
 Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
@@ -268,7 +272,7 @@ Value nr_rt_http_app(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Val
 }
 Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "time") == 0) { Value m = val_obj(); set_field(m, "now", val_func(nr_rt_now)); set_field(m, "millis", val_func(nr_rt_millis)); set_field(m, "toUnix", val_func(nr_rt_time_to_unix)); set_field(m, "fromDate", val_func(nr_rt_from_date)); return m; }
-  if (strcmp(name, "math") == 0) { Value m = val_obj(); set_field(m, "sqrt", val_func(nr_rt_sqrt)); set_field(m, "random", val_func(nr_rt_random)); return m; }
+  if (strcmp(name, "math") == 0) { Value m = val_obj(); set_field(m, "sqrt", val_func(nr_rt_sqrt)); set_field(m, "random", val_func(nr_rt_random)); set_field(m, "max", val_func(nr_rt_max)); set_field(m, "min", val_func(nr_rt_min)); set_field(m, "abs", val_func(nr_rt_abs)); return m; }
   if (strcmp(name, "json") == 0) { Value m = val_obj(); set_field(m, "parse", val_func(nr_rt_json_parse)); set_field(m, "stringify", val_func(nr_rt_json_encode)); set_field(m, "encode", val_func(nr_rt_json_encode)); return m; }
   if (strcmp(name, "file") == 0) { Value m = val_obj(); set_field(m, "read", val_func(nr_rt_file_read)); set_field(m, "write", val_func(nr_rt_file_write)); set_field(m, "remove", val_func(nr_rt_file_delete)); set_field(m, "exists", val_func(nr_rt_file_exists)); set_field(m, "append", val_func(nr_rt_file_append)); return m; }
   if (strcmp(name, "sys") == 0) { Value m = val_obj(); set_field(m, "run", val_func(nr_rt_sys_run)); set_field(m, "args", val_func(nr_rt_args)); set_field(m, "exit", val_func(nr_rt_exit)); return m; }
@@ -278,6 +282,9 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "encoding") == 0) { Value m = val_obj(); set_field(m, "toBase64", val_func(nr_rt_to_base64)); set_field(m, "fromBase64", val_func(nr_rt_from_base64)); return m; }
   if (strcmp(name, "collection") == 0) { Value m = val_obj(); set_field(m, "toSet", val_func(nr_rt_to_set)); return m; }
   if (strcmp(name, "sqlite3") == 0) { Value m = val_obj(); set_field(m, "open", val_func(nr_rt_sqlite3_open)); set_field(m, "close", val_func(nr_rt_sqlite3_close)); set_field(m, "exec", val_func(nr_rt_sqlite3_exec)); set_field(m, "query", val_func(nr_rt_sqlite3_query)); return m; }
+  if (strcmp(name, "object") == 0) { Value m = val_obj(); set_field(m, "keys", val_func(nr_rt_obj_keys)); set_field(m, "assign", val_func(nr_rt_obj_assign)); return m; }
+  if (strcmp(name, "string") == 0) { Value m = val_obj(); return m; }
+  if (strcmp(name, "array") == 0) { Value m = val_obj(); set_field(m, "push", val_func(nr_rt_push)); return m; }
   return val_obj();
 }
 Value nr_create_matrix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
@@ -288,7 +295,7 @@ Value nr_v_end;
 Value nr_v_sum;
 long long nr_v_i;
 long long nr_v_j;
-long long nr_v_n;
+Value nr_v_n;
 Value nr_v_temp;
 char* nr_v_s; int nr_v_s_len;
 Value nr_v_result;
@@ -300,9 +307,14 @@ Value nr_v_json;
 Value nr_v_file;
 Value nr_v_http;
 Value nr_v_create_matrix;
+Value nr_v_rows;
+Value nr_v_cols;
+Value nr_v_initial;
 Value nr_v_m;
 Value nr_v_row;
 Value nr_v_multiply;
+Value nr_v_a;
+Value nr_v_b;
 Value nr_v_rows_a;
 Value nr_v_cols_a;
 Value nr_v_rows_b;
@@ -315,10 +327,10 @@ Value nr_v_mat_a;
 Value nr_v_mat_b;
 Value nr_v_res;
 Value nr_create_matrix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
-  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_rows = _v0; if(nr_v_rows.type == VAL_NIL) { }
-  Value nr_v_cols = _v1; if(nr_v_cols.type == VAL_NIL) { }
-  Value nr_v_initial = _v2; if(nr_v_initial.type == VAL_NIL) { }
+  long long nr_v_i=0, nr_v_j=0;
+  nr_v_rows = _v0; if(nr_v_rows.type == VAL_NIL) { }
+  nr_v_cols = _v1; if(nr_v_cols.type == VAL_NIL) { }
+  nr_v_initial = _v2; if(nr_v_initial.type == VAL_NIL) { }
   nr_v_m = ({ Value _a = val_arr(); _a; });
   nr_v_i = 0LL;
   while ((nr_v_i < (nr_v_rows).data.i)) {
@@ -337,9 +349,9 @@ Value nr_create_matrix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, V
   return val_nil();
 }
 Value nr_multiply(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
-  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_a = _v0; if(nr_v_a.type == VAL_NIL) { }
-  Value nr_v_b = _v1; if(nr_v_b.type == VAL_NIL) { }
+  long long nr_v_i=0, nr_v_j=0;
+  nr_v_a = _v0; if(nr_v_a.type == VAL_NIL) { }
+  nr_v_b = _v1; if(nr_v_b.type == VAL_NIL) { }
   nr_v_rows_a = nr_rt_len(val_nil(), nr_v_a, val_nil(), val_nil(), val_nil(), val_nil());
   nr_v_cols_a = nr_rt_len(val_nil(), nr_rt_at(val_nil(), nr_v_a, val_int(0), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil());
   nr_v_rows_b = nr_rt_len(val_nil(), nr_v_b, val_nil(), val_nil(), val_nil(), val_nil());
@@ -373,8 +385,8 @@ Value nr_multiply(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value 
   return val_nil();
 }
 Value nr_print_matrix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
-  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
-  Value nr_v_m = _v0; if(nr_v_m.type == VAL_NIL) { }
+  long long nr_v_i=0, nr_v_j=0;
+  nr_v_m = _v0; if(nr_v_m.type == VAL_NIL) { }
   { Value _iter = nr_v_m; if (_iter.type == VAL_ARR) {
     for (int _i = 0; _i < _iter.data.arr->count; _i++) {
       nr_v_row = _iter.data.arr->elements[_i];
@@ -393,7 +405,7 @@ Value nr_print_matrix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Va
   return val_nil();
 }
 int main(int argc, char** argv) {
-  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;
+  long long nr_v_i=0, nr_v_j=0;
   size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); nr_arena->heap_start = malloc(heap_size); nr_arena->current = nr_arena->heap_start;
   nr_argc = argc; nr_argv = argv;
   nr_v_start = val_nil();
@@ -401,7 +413,7 @@ int main(int argc, char** argv) {
   nr_v_sum = val_nil();
   nr_v_i = 0;
   nr_v_j = 0;
-  nr_v_n = 0;
+  nr_v_n = val_nil();
   nr_v_temp = val_nil();
   nr_v_s = malloc(10 * 1024 * 1024); nr_v_s_len = 0;
   nr_v_result = val_nil();
@@ -413,9 +425,14 @@ int main(int argc, char** argv) {
   nr_v_file = val_nil();
   nr_v_http = val_nil();
   nr_v_create_matrix = val_nil();
+  nr_v_rows = val_nil();
+  nr_v_cols = val_nil();
+  nr_v_initial = val_nil();
   nr_v_m = val_nil();
   nr_v_row = val_nil();
   nr_v_multiply = val_nil();
+  nr_v_a = val_nil();
+  nr_v_b = val_nil();
   nr_v_rows_a = val_nil();
   nr_v_cols_a = val_nil();
   nr_v_rows_b = val_nil();
@@ -434,7 +451,7 @@ int main(int argc, char** argv) {
 val_func(nr_create_matrix);
 val_func(nr_multiply);
 val_func(nr_print_matrix);
-val_func(nr_main);
+val_nil();
 ({ nr_rt_print(val_nil(), val_str("=== MATRIX MULTIPLICATION TEST ==="), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   nr_v_mat_a = ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, val_int(1), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(2), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(3), val_nil(), val_nil(), val_nil()); _a; }), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, val_int(4), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(5), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(6), val_nil(), val_nil(), val_nil()); _a; }), val_nil(), val_nil(), val_nil()); _a; });
   nr_v_mat_b = ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, val_int(7), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(8), val_nil(), val_nil(), val_nil()); _a; }), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, val_int(9), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(10), val_nil(), val_nil(), val_nil()); _a; }), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, val_int(11), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(12), val_nil(), val_nil(), val_nil()); _a; }), val_nil(), val_nil(), val_nil()); _a; });
