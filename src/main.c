@@ -185,22 +185,54 @@ void handle_test(int argc, char **argv) {
     }
   }
 
-  printf("\n🚀 Running Nira Test Suite...\n");
+  int is_build = (argc > 2 && strcmp(argv[2], "-b") == 0);
+  
+  printf("\n🚀 Running Nira Test Suite %s...\n", is_build ? "(Build Mode)" : "(Interpreter Mode)");
   printf("========================================\n");
 
   for (int i = 0; i < total; i++) {
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "./nira run tests/%s > /dev/null 2>&1", test_files[i]);
-    
-    printf("[%02d/%02d] Testing %-30s ", i + 1, total, test_files[i]);
-    fflush(stdout);
+    char cmd[2048];
+    if (is_build) {
+      char bin_name[256];
+      strncpy(bin_name, test_files[i], sizeof(bin_name));
+      char *dot = strrchr(bin_name, '.');
+      if (dot) *dot = '\0';
+      
+      // Build first
+      snprintf(cmd, sizeof(cmd), "./nira build tests/%s > /dev/null 2>&1", test_files[i]);
+      int build_status = system(cmd);
+      
+      if (build_status == 0) {
+        // Run the binary
+        snprintf(cmd, sizeof(cmd), "./build/%s > /dev/null 2>&1", bin_name);
+      } else {
+        // Build failed, set a non-zero status to trigger FAILED
+        build_status = 1;
+      }
+      
+      printf("[%02d/%02d] Testing %-30s ", i + 1, total, test_files[i]);
+      fflush(stdout);
 
-    int status = system(cmd);
-    if (status == 0) {
-      printf("\033[1;32mPASSED\033[0m\n");
-      passed++;
+      int status = (build_status == 0) ? system(cmd) : build_status;
+      if (status == 0) {
+        printf("\033[1;32mPASSED\033[0m\n");
+        passed++;
+      } else {
+        printf("\033[1;31mFAILED\033[0m\n");
+      }
     } else {
-      printf("\033[1;31mFAILED\033[0m\n");
+      snprintf(cmd, sizeof(cmd), "./nira run tests/%s > /dev/null 2>&1", test_files[i]);
+      
+      printf("[%02d/%02d] Testing %-30s ", i + 1, total, test_files[i]);
+      fflush(stdout);
+
+      int status = system(cmd);
+      if (status == 0) {
+        printf("\033[1;32mPASSED\033[0m\n");
+        passed++;
+      } else {
+        printf("\033[1;31mFAILED\033[0m\n");
+      }
     }
     free(test_files[i]);
   }

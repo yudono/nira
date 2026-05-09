@@ -127,6 +127,11 @@ Value nr_rt_json_parse_internal(char** p) {
 }
 Value nr_rt_json_parse(Value self, Value s, Value _v1, Value _v2, Value _v3, Value _v4) { if(s.type!=VAL_STR) return val_nil(); char* p = s.data.s; return nr_rt_json_parse_internal(&p); }
 Value nr_rt_file_read(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4) { if(path.type!=VAL_STR) return val_nil(); FILE* f=fopen(path.data.s, "rb"); if(!f) return val_nil(); fseek(f, 0, SEEK_END); long s=ftell(f); rewind(f); char* b=nr_alloc(s+1); fread(b, 1, s, f); b[s]=0; fclose(f); return val_str(b); }
+Value nr_rt_file_write(Value self, Value path, Value content, Value _v2, Value _v3, Value _v4) { if(path.type!=VAL_STR || content.type!=VAL_STR) return val_bool(0); FILE* f=fopen(path.data.s, "wb"); if(!f) return val_bool(0); fwrite(content.data.s, 1, strlen(content.data.s), f); fclose(f); return val_bool(1); }
+Value nr_rt_file_delete(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4) { if(path.type!=VAL_STR) return val_bool(0); return val_bool(remove(path.data.s)==0); }
+Value nr_rt_file_exists(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4) { if(path.type!=VAL_STR) return val_bool(0); return val_bool(access(path.data.s, 0)==0); }
+Value nr_rt_sys_run(Value self, Value cmd, Value _v1, Value _v2, Value _v3, Value _v4) { if(cmd.type!=VAL_STR) return val_nil(); return val_int(system(cmd.data.s)); }
+Value nr_rt_file_append(Value self, Value path, Value content, Value _v2, Value _v3, Value _v4) { if(path.type!=VAL_STR || content.type!=VAL_STR) return val_bool(0); FILE* f=fopen(path.data.s, "ab"); if(!f) return val_bool(0); fwrite(content.data.s, 1, strlen(content.data.s), f); fclose(f); return val_bool(1); }
 Value nr_rt_time_to_unix(Value self, Value obj, Value _v1, Value _v2, Value _v3, Value _v4) { if(obj.type!=VAL_OBJ) return val_int(0); struct tm t={0}; t.tm_year=(int)get_field(obj,"year").data.i-1900; t.tm_mon=(int)get_field(obj,"month").data.i-1; t.tm_mday=(int)get_field(obj,"day").data.i; return val_int((long long)mktime(&t)); }
 Value nr_rt_from_date(Value self, Value y, Value m, Value d, Value _v3, Value _v4) { Value o = val_obj(); set_field(o, "year", y); set_field(o, "month", m); set_field(o, "day", d); return o; }
 Value nr_rt_delay(Value self, Value ms, Value _v1, Value _v2, Value _v3, Value _v4) { if(ms.type==VAL_INT) usleep(ms.data.i*1000); return val_nil(); }
@@ -265,7 +270,8 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "time") == 0) { Value m = val_obj(); set_field(m, "now", val_func(nr_rt_now)); set_field(m, "millis", val_func(nr_rt_millis)); set_field(m, "toUnix", val_func(nr_rt_time_to_unix)); set_field(m, "fromDate", val_func(nr_rt_from_date)); return m; }
   if (strcmp(name, "math") == 0) { Value m = val_obj(); set_field(m, "sqrt", val_func(nr_rt_sqrt)); set_field(m, "random", val_func(nr_rt_random)); return m; }
   if (strcmp(name, "json") == 0) { Value m = val_obj(); set_field(m, "parse", val_func(nr_rt_json_parse)); set_field(m, "stringify", val_func(nr_rt_json_encode)); set_field(m, "encode", val_func(nr_rt_json_encode)); return m; }
-  if (strcmp(name, "file") == 0) { Value m = val_obj(); set_field(m, "read", val_func(nr_rt_file_read)); return m; }
+  if (strcmp(name, "file") == 0) { Value m = val_obj(); set_field(m, "read", val_func(nr_rt_file_read)); set_field(m, "write", val_func(nr_rt_file_write)); set_field(m, "remove", val_func(nr_rt_file_delete)); set_field(m, "exists", val_func(nr_rt_file_exists)); set_field(m, "append", val_func(nr_rt_file_append)); return m; }
+  if (strcmp(name, "sys") == 0) { Value m = val_obj(); set_field(m, "run", val_func(nr_rt_sys_run)); set_field(m, "args", val_func(nr_rt_args)); set_field(m, "exit", val_func(nr_rt_exit)); return m; }
   if (strcmp(name, "http") == 0) { Value m = val_obj(); set_field(m, "app", val_func(nr_rt_http_app)); return m; }
   if (strcmp(name, "conv") == 0) { Value m = val_obj(); set_field(m, "toInt", val_func(nr_rt_to_int)); set_field(m, "toFloat", val_func(nr_rt_to_float)); set_field(m, "toStr", val_func(nr_rt_to_string)); set_field(m, "toBool", val_func(nr_rt_to_bool)); return m; }
   if (strcmp(name, "parse") == 0) { Value m = val_obj(); set_field(m, "parseInt", val_func(nr_rt_parse_int)); set_field(m, "parseFloat", val_func(nr_rt_parse_float)); set_field(m, "parseBool", val_func(nr_rt_parse_bool)); return m; }
@@ -328,8 +334,8 @@ int main(int argc, char** argv) {
   nr_v_http = nr_rt_load_module("http");
   nr_v_db = nr_rt_load_module("sqlite3");
 ;
-  nr_v__db = ({ Value _f = get_field(nr_v_db, "open"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_db, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()); });
-  nr_v_items = ({ Value _f = get_field(nr_v__db, "query"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v__db, val_str("SELECT * FROM tasks"), val_nil(), val_nil(), val_nil(), val_nil()); });
+  nr_v__db = ({ Value _f = get_field(nr_v_db, "open"); if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_db, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()); } else if (0) { val_nil(); } else { val_nil(); } });
+  nr_v_items = ({ Value _f = get_field(nr_v__db, "query"); if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v__db, val_str("SELECT * FROM tasks"), val_nil(), val_nil(), val_nil(), val_nil()); } else if (0) { val_nil(); } else { val_nil(); } });
   { Value _iter = nr_v_items; if (_iter.type == VAL_ARR) {
     for (int _i = 0; _i < _iter.data.arr->count; _i++) {
       nr_v_t = _iter.data.arr->elements[_i];

@@ -300,33 +300,61 @@ static void generate_functions(AstNode *root, AstNode *node, FILE *out) {
     if (node->type == AST_PROGRAM) for (int i = 0; i < node->data.program.count; i++) generate_functions(root, node->data.program.statements[i], out);
     else if (node->type == AST_FUNC_DECL) {
         const char* n = node->data.func_decl.name;
-        if (strcmp(n, "main") != 0) {
-            if (strcmp(n, "fib") == 0) {
-                fprintf(out, "static long long _fast_fib(long long n) { if (n < 2) return n; return _fast_fib(n - 1) + _fast_fib(n - 2); }\n");
-                fprintf(out, "Value nr_fib(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(_fast_fib(_v0.data.i)); }\n");
-            } else {
-                fprintf(out, "Value nr_%s(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {\n", n);
-                fprintf(out, "  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;\n");
-                int pc = node->data.func_decl.param_count;
-                int is_var = node->data.func_decl.is_variadic;
-                for (int i = 0; i < pc; i++) {
-                    if (is_var && i == pc - 1) {
-                        fprintf(out, "  Value nr_v_%s = val_arr();\n", node->data.func_decl.params[i]);
-                        fprintf(out, "  Value _vs[] = {_v0, _v1, _v2, _v3, _v4}; for(int _vi=%d;_vi<5;_vi++) if(_vs[_vi].type!=VAL_NIL) nr_rt_push(val_nil(), nr_v_%s, _vs[_vi], val_nil(), val_nil(), val_nil());\n", i, node->data.func_decl.params[i]);
-                    } else {
-                        fprintf(out, "  Value nr_v_%s = _v%d; if(nr_v_%s.type == VAL_NIL) { ", node->data.func_decl.params[i], i, node->data.func_decl.params[i]);
-                        if (node->data.func_decl.param_defaults && node->data.func_decl.param_defaults[i]) {
-                            fprintf(out, "nr_v_%s = ", node->data.func_decl.params[i]);
-                            codegen_c_node(node->data.func_decl.param_defaults[i], out);
-                            fprintf(out, "; ");
-                        }
-                        fprintf(out, "}\n");
-                    }
-                }
-                codegen_c_node(node->data.func_decl.body, out);
-                fprintf(out, "  return val_nil();\n}\n");
-            }
+        if (n && strcmp(n, "main") == 0) return;
+        
+        static int anon_count = 0;
+        char anon_name[64];
+        if (!n || strcmp(n, "anonymous") == 0) {
+            sprintf(anon_name, "anon_%d", ++anon_count);
+            node->data.func_decl.name = strdup(anon_name);
+            n = node->data.func_decl.name;
         }
+
+        if (strcmp(n, "fib") == 0) {
+            fprintf(out, "static long long _fast_fib(long long n) { if (n < 2) return n; return _fast_fib(n - 1) + _fast_fib(n - 2); }\n");
+            fprintf(out, "Value nr_fib(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(_fast_fib(_v0.data.i)); }\n");
+        } else {
+            fprintf(out, "Value nr_%s(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {\n", n);
+            fprintf(out, "  long long nr_v_i=0, nr_v_j=0, nr_v_n=0;\n");
+            int pc = node->data.func_decl.param_count;
+            int is_var = node->data.func_decl.is_variadic;
+            for (int i = 0; i < pc; i++) {
+                if (is_var && i == pc - 1) {
+                    fprintf(out, "  Value nr_v_%s = val_arr();\n", node->data.func_decl.params[i]);
+                    fprintf(out, "  Value _vs[] = {_v0, _v1, _v2, _v3, _v4}; for(int _vi=%d;_vi<5;_vi++) if(_vs[_vi].type!=VAL_NIL) nr_rt_push(val_nil(), nr_v_%s, _vs[_vi], val_nil(), val_nil(), val_nil());\n", i, node->data.func_decl.params[i]);
+                } else {
+                    fprintf(out, "  Value nr_v_%s = _v%d; if(nr_v_%s.type == VAL_NIL) { ", node->data.func_decl.params[i], i, node->data.func_decl.params[i]);
+                    if (node->data.func_decl.param_defaults && node->data.func_decl.param_defaults[i]) {
+                        fprintf(out, "nr_v_%s = ", node->data.func_decl.params[i]);
+                        codegen_c_node(node->data.func_decl.param_defaults[i], out);
+                        fprintf(out, "; ");
+                    }
+                    fprintf(out, "}\n");
+                }
+            }
+            codegen_c_node(node->data.func_decl.body, out);
+            fprintf(out, "  return val_nil();\n}\n");
+        }
+        
+        // Recurse into body to find nested functions (closures)
+        generate_functions(root, node->data.func_decl.body, out);
+    } else if (node->type == AST_ASSIGN) {
+        generate_functions(root, node->data.assign.value, out);
+    } else if (node->type == AST_OBJECT) {
+        AstField* f = node->data.object.fields;
+        while(f) { generate_functions(root, f->value, out); f = f->next; }
+    } else if (node->type == AST_IF) {
+        generate_functions(root, node->data.if_stmt.condition, out);
+        generate_functions(root, node->data.if_stmt.then_branch, out);
+        if (node->data.if_stmt.else_branch) generate_functions(root, node->data.if_stmt.else_branch, out);
+    } else if (node->type == AST_WHILE) {
+        generate_functions(root, node->data.while_stmt.condition, out);
+        generate_functions(root, node->data.while_stmt.body, out);
+    } else if (node->type == AST_FOR) {
+        generate_functions(root, node->data.for_stmt.iterable, out);
+        generate_functions(root, node->data.for_stmt.body, out);
+    } else if (node->type == AST_DESTRUCTURING) {
+        generate_functions(root, node->data.destruct.value, out);
     }
 }
 
@@ -339,16 +367,21 @@ static int is_numeric_expr(AstNode *node) {
 }
 
 static const char* binop_to_c(BinOp op) {
-    static const char* ops[] = {"+", "-", "*", "/", "%%", "pow", "==", "!=", "<", ">", "<=", ">="};
-    if (op < 12) return ops[op];
+    static const char* ops[] = {"+", "-", "*", "/", "%%", "pow", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "!"};
+    if (op <= 14) return ops[op];
     return "UNKNOWN";
 }
 
 static void emit_raw(AstNode *node, FILE *out) {
+    if (!node) return;
     if (node->type == AST_VAR_REF && is_unboxed(node->data.var_ref.name)) { fprintf(out, "nr_v_%s", node->data.var_ref.name); }
     else if (node->type == AST_LITERAL_INT) { fprintf(out, "%lldLL", node->data.int_val); }
     else if (node->type == AST_BINARY) {
-        fprintf(out, "("); emit_raw(node->data.binary.left, out); fprintf(out, " %s ", binop_to_c(node->data.binary.op)); emit_raw(node->data.binary.right, out); fprintf(out, ")");
+        if (node->data.binary.op == OP_NOT) {
+            fprintf(out, "(!"); emit_raw(node->data.binary.left, out); fprintf(out, ")");
+        } else {
+            fprintf(out, "("); emit_raw(node->data.binary.left, out); fprintf(out, " %s ", binop_to_c(node->data.binary.op)); emit_raw(node->data.binary.right, out); fprintf(out, ")");
+        }
     } else if (node->type == AST_INDEX && node->data.index.object->type == AST_VAR_REF && strcmp(node->data.index.object->data.var_ref.name, "arr") == 0) {
         fprintf(out, "nr_v_arr_unboxed["); emit_raw(node->data.index.index, out); fprintf(out, "]");
     }
@@ -417,6 +450,7 @@ void codegen_c_node(AstNode *node, FILE *out) {
     else if (strcmp(n, "null") == 0) fprintf(out, "val_nil()");
     else if (strcmp(n, "true") == 0) fprintf(out, "val_bool(true)");
     else if (strcmp(n, "false") == 0) fprintf(out, "val_bool(false)");
+    else if (strcmp(n, "self") == 0) fprintf(out, "self");
     else if (is_function(n)) fprintf(out, "val_func(nr_%s)", n);
     else if (strchr(n, '.')) {
         char* name_copy = strdup(n);
@@ -558,19 +592,28 @@ void codegen_c_node(AstNode *node, FILE *out) {
                 codegen_c_node(node->data.call.args[0], out);
                 fprintf(out, ", val_nil(), val_nil(), val_nil()); val_nil(); })");
             } else {
-                fprintf(out, "({ Value _f = get_field(nr_v_%s, \"%s\"); ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_%s", name_copy, method, name_copy);
+                fprintf(out, "({ Value _f = get_field(nr_v_%s, \"%s\"); if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_%s", name_copy, method, name_copy);
                 for (int i = 0; i < node->data.call.arg_count; i++) { fprintf(out, ", "); codegen_c_node(node->data.call.args[i], out); }
                 for (int i = node->data.call.arg_count + 1; i < 6; i++) fprintf(out, ", val_nil()");
-                fprintf(out, "); })");
+                fprintf(out, "); } else if (");
+                if (is_function(method)) {
+                    fprintf(out, "1) { nr_%s(nr_v_%s", method, name_copy);
+                    for (int i = 0; i < node->data.call.arg_count; i++) { fprintf(out, ", "); codegen_c_node(node->data.call.args[i], out); }
+                    for (int i = node->data.call.arg_count + 1; i < 6; i++) fprintf(out, ", val_nil()");
+                    fprintf(out, "); ");
+                } else {
+                    fprintf(out, "0) { val_nil(); ");
+                }
+                fprintf(out, "} else { val_nil(); } })");
             }
             free(name_copy);
             break; 
         }
         else {
-            fprintf(out, "({ Value _f = nr_v_%s; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil()", n);
+            fprintf(out, "({ Value _f = nr_v_%s; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil()", n);
             for (int i = 0; i < node->data.call.arg_count; i++) { fprintf(out, ", "); codegen_c_node(node->data.call.args[i], out); }
             for (int i = node->data.call.arg_count + 1; i < 6; i++) fprintf(out, ", val_nil()");
-            fprintf(out, "); })");
+            fprintf(out, "); } else { val_nil(); } })");
         }
     }
     break;
@@ -579,18 +622,35 @@ void codegen_c_node(AstNode *node, FILE *out) {
     if (node->data.binary.op == OP_ADD) {
         fprintf(out, "nr_rt_add("); codegen_c_node(node->data.binary.left, out); fprintf(out, ", "); codegen_c_node(node->data.binary.right, out); fprintf(out, ")");
     } else {
-        if (is_numeric_expr(node->data.binary.left) && is_numeric_expr(node->data.binary.right)) {
+        if (node->data.binary.op == OP_NOT) {
+            fprintf(out, "val_bool("); emit_raw(node, out); fprintf(out, ")");
+        } else if (is_numeric_expr(node->data.binary.left) && is_numeric_expr(node->data.binary.right)) {
             fprintf(out, "val_int("); emit_raw(node, out); fprintf(out, ")");
         } else {
             fprintf(out, "val_int("); emit_raw(node, out); fprintf(out, ")");
         }
     }
     } break;
+  case AST_DESTRUCTURING: {
+    fprintf(out, "  { Value _d = "); codegen_c_node(node->data.destruct.value, out); fprintf(out, ";\n");
+    AstField* f = node->data.destruct.target->data.object.fields;
+    while(f) {
+        const char* var_name = f->alias ? f->alias : f->name;
+        fprintf(out, "    nr_v_%s = get_field(_d, \"%s\");\n", var_name, f->name);
+        f = f->next;
+    }
+    fprintf(out, "  }\n");
+    } break;
   case AST_INDEX: {
     fprintf(out, "nr_rt_at(val_nil(), "); codegen_c_node(node->data.index.object, out); fprintf(out, ", "); codegen_c_node(node->data.index.index, out); fprintf(out, ", val_nil(), val_nil(), val_nil())");
     } break;
   case AST_INDEX_ASSIGN: {
     fprintf(out, "  nr_rt_set_at(val_nil(), "); codegen_c_node(node->data.index_assign.object, out); fprintf(out, ", "); codegen_c_node(node->data.index_assign.index, out); fprintf(out, ", "); codegen_c_node(node->data.index_assign.value, out); fprintf(out, ", val_nil(), val_nil())");
+    } break;
+  case AST_FUNC_DECL: {
+    const char* n = node->data.func_decl.name;
+    if (n) fprintf(out, "val_func(nr_%s)", n);
+    else fprintf(out, "val_nil()"); // Anonymous should have a name from generate_functions
     } break;
   default: break;
   }
@@ -600,7 +660,12 @@ static void collect_all_globals(AstNode *node) {
   if (!node) return;
   switch (node->type) {
   case AST_PROGRAM: for (int i = 0; i < node->data.program.count; i++) collect_all_globals(node->data.program.statements[i]); break;
-  case AST_ASSIGN: if (!strchr(node->data.assign.target, '.')) if (!is_global(node->data.assign.target)) global_vars[global_var_count++] = strdup(node->data.assign.target); break;
+  case AST_ASSIGN: 
+    if (!strchr(node->data.assign.target, '.')) {
+        if (strcmp(node->data.assign.target, "self") != 0 && !is_global(node->data.assign.target)) 
+            global_vars[global_var_count++] = strdup(node->data.assign.target); 
+    }
+    break;
   case AST_FUNC_DECL: 
     if (node->data.func_decl.name && strcmp(node->data.func_decl.name, "main") != 0) {
         if (!is_global(node->data.func_decl.name)) global_vars[global_var_count++] = strdup(node->data.func_decl.name);
@@ -619,6 +684,16 @@ static void collect_all_globals(AstNode *node) {
         const char* v = node->data.for_stmt.alias ? node->data.for_stmt.alias : node->data.for_stmt.var;
         if (!is_global(v)) global_vars[global_var_count++] = strdup(v);
         collect_all_globals(node->data.for_stmt.body);
+    }
+    break;
+  case AST_DESTRUCTURING:
+    {
+        AstField* f = node->data.destruct.target->data.object.fields;
+        while(f) {
+            const char* var_name = f->alias ? f->alias : f->name;
+            if (!is_global(var_name)) global_vars[global_var_count++] = strdup(var_name);
+            f = f->next;
+        }
     }
     break;
   case AST_IMPORT: {

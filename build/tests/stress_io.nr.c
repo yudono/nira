@@ -356,20 +356,20 @@ int main(int argc, char** argv) {
   nr_v_http = nr_rt_load_module("http");
   { Value _m = nr_rt_load_module("file"); nr_v_write = get_field(_m, "write"); nr_v_read = get_field(_m, "read"); nr_v_remove = get_field(_m, "remove"); nr_v_exists = get_field(_m, "exists"); nr_v_append = get_field(_m, "append"); }
 ;
-;
+val_func(nr_main);
 ({ nr_rt_print(val_nil(), val_str("=== STRESS: I/O Stability ==="), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("File Round-Trip:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_io.txt"), val_str("Hello Nira!"), val_nil(), val_nil(), val_nil()); });
-  nr_v_content = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_io.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_io.txt"), val_str("Hello Nira!"), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_content = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_io.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Read: "), nr_v_content), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_io.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_io.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), val_str("File removed"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("Write/Read Cycles (100x):"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   nr_v_i = 0LL;
   while ((nr_v_i < 100LL)) {
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_cycle.txt"), nr_rt_add(val_str("iteration_"), val_int(nr_v_i)), val_nil(), val_nil(), val_nil()); });
-  nr_v_data = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_cycle.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_cycle.txt"), nr_rt_add(val_str("iteration_"), val_int(nr_v_i)), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_data = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_cycle.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   if ((nr_v_i == 0LL)) {
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("First read: "), nr_v_data), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   };
@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
   nr_v_i = (nr_v_i + 1LL);
   }
 ;
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_cycle.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_cycle.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), val_str("100 cycles completed"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("Large Content Write:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
@@ -390,33 +390,33 @@ int main(int argc, char** argv) {
   nr_v_j = (nr_v_j + 1LL);
   }
 ;
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_large.txt"), nr_v_big_content, val_nil(), val_nil(), val_nil()); });
-  nr_v_read_back = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_large.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_large.txt"), nr_v_big_content, val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_read_back = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_large.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Wrote 500 lines, read back length: "), nr_rt_len(val_nil(), nr_v_read_back, val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_large.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_large.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("Append Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), val_str("Line 1\n"), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), val_str("Line 1\n"), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   nr_v_k = val_int(2);
   while (((nr_v_k).data.i <= 50LL)) {
-({ Value _f = nr_v_append; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), nr_rt_add(nr_rt_add(val_str("Line "), nr_v_k), val_str("\n")), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_append; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), nr_rt_add(nr_rt_add(val_str("Line "), nr_v_k), val_str("\n")), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   nr_v_k = nr_rt_add(nr_v_k, val_int(1));
   }
 ;
-  nr_v_appended = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+  nr_v_appended = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Appended 50 lines, length: "), nr_rt_len(val_nil(), nr_v_appended, val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_append.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("Multiple Files:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   nr_v_m = val_int(0);
   while (((nr_v_m).data.i < 10LL)) {
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_rt_add(nr_rt_add(val_str("_test_multi_"), nr_v_m), val_str(".txt")), nr_rt_add(val_str("Content of file "), nr_v_m), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_rt_add(nr_rt_add(val_str("_test_multi_"), nr_v_m), val_str(".txt")), nr_rt_add(val_str("Content of file "), nr_v_m), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   nr_v_m = nr_rt_add(nr_v_m, val_int(1));
   }
 ;
   nr_v_n = 0LL;
   while ((nr_v_n < 10LL)) {
-  nr_v_c = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_rt_add(nr_rt_add(val_str("_test_multi_"), val_int(nr_v_n)), val_str(".txt")), val_nil(), val_nil(), val_nil(), val_nil()); });
+  nr_v_c = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_rt_add(nr_rt_add(val_str("_test_multi_"), val_int(nr_v_n)), val_str(".txt")), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   if ((nr_v_n == 0LL)) {
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("File 0: "), nr_v_c), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   };
@@ -428,32 +428,32 @@ int main(int argc, char** argv) {
 ;
   nr_v_p = val_int(0);
   while (((nr_v_p).data.i < 10LL)) {
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_rt_add(nr_rt_add(val_str("_test_multi_"), nr_v_p), val_str(".txt")), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_rt_add(nr_rt_add(val_str("_test_multi_"), nr_v_p), val_str(".txt")), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   nr_v_p = nr_rt_add(nr_v_p, val_int(1));
   }
 ;
 ({ nr_rt_print(val_nil(), val_str("10 files created, read, and removed"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("File Exists Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_str("check"), val_nil(), val_nil(), val_nil()); });
-  nr_v_ex = ({ Value _f = nr_v_exists; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_str("check"), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_ex = ({ Value _f = nr_v_exists; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("exists (before remove): "), nr_v_ex), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
-  nr_v_ex2 = ({ Value _f = nr_v_exists; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_ex2 = ({ Value _f = nr_v_exists; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_exists.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("exists (after remove): "), nr_v_ex2), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("Overwrite Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_str("original"), val_nil(), val_nil(), val_nil()); });
-({ nr_rt_print(val_nil(), nr_rt_add(val_str("Before: "), ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_nil(), val_nil(), val_nil(), val_nil()); })), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_str("overwritten"), val_nil(), val_nil(), val_nil()); });
-({ nr_rt_print(val_nil(), nr_rt_add(val_str("After: "), ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_nil(), val_nil(), val_nil(), val_nil()); })), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_str("original"), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+({ nr_rt_print(val_nil(), nr_rt_add(val_str("Before: "), ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } })), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_str("overwritten"), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+({ nr_rt_print(val_nil(), nr_rt_add(val_str("After: "), ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } })), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_overwrite.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("Empty File Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_empty.txt"), val_str(""), val_nil(), val_nil(), val_nil()); });
-  nr_v_empty_content = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_empty.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_empty.txt"), val_str(""), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_empty_content = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_empty.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Empty file length: "), nr_rt_len(val_nil(), nr_v_empty_content, val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_empty.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("_test_empty.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), val_str(""), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("=== I/O Stability stress PASSED ==="), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   return 0; 

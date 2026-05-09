@@ -345,13 +345,13 @@ int main(int argc, char** argv) {
 ;
   { Value _m = nr_rt_load_module("sys"); nr_v_run = get_field(_m, "run"); }
 ;
-;
-;
+val_func(nr_greet);
+val_func(nr_main);
 nr_greet(val_nil(), ({ Value _o = val_obj(); set_field(_o, "name", val_str("Budi")); set_field(_o, "age", val_str("25")); _o; }), val_nil(), val_nil(), val_nil(), val_nil());
-({ Value _f = nr_v_write; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_str("Hello from Nira!"), val_nil(), val_nil(), val_nil()); });
-  nr_v_content = ({ Value _f = nr_v_read; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_write; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_str("Hello from Nira!"), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+  nr_v_content = ({ Value _f = nr_v_read; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
 ({ nr_rt_print(val_nil(), nr_v_content, val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_run; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("ls -l test.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
-({ Value _f = nr_v_remove; ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil()); });
+({ Value _f = nr_v_run; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("ls -l test.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
+({ Value _f = nr_v_remove; if(_f.type==VAL_FUNC) { ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil()); } else { val_nil(); } });
   return 0; 
 }
