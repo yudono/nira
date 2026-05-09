@@ -1483,6 +1483,31 @@ static Value eval_call(AstNode *node, Environment *env) {
         char *s = nr_read_file_internal(path.data.s);
         return s ? val_str(s) : val_nil();
       }
+      if (strcmp(full_name, "__builtin_file_write") == 0) {
+        Value path = eval(node->data.call.args[0], env);
+        Value content = eval(node->data.call.args[1], env);
+        if (path.type != VAL_STR || content.type != VAL_STR) return val_nil();
+        FILE *f = fopen(path.data.s, "wb");
+        if (!f) return val_bool(0);
+        fwrite(content.data.s, 1, strlen(content.data.s), f);
+        fclose(f);
+        return val_bool(1);
+      }
+      if (strcmp(full_name, "__builtin_file_delete") == 0) {
+        Value path = eval(node->data.call.args[0], env);
+        if (path.type != VAL_STR) return val_nil();
+        return val_bool(remove(path.data.s) == 0);
+      }
+      if (strcmp(full_name, "__builtin_file_exists") == 0) {
+        Value path = eval(node->data.call.args[0], env);
+        if (path.type != VAL_STR) return val_nil();
+        return val_bool(access(path.data.s, F_OK) == 0);
+      }
+      if (strcmp(full_name, "__builtin_sys_run") == 0) {
+        Value cmd = eval(node->data.call.args[0], env);
+        if (cmd.type != VAL_STR) return val_nil();
+        return val_int(system(cmd.data.s));
+      }
 
       if (strcmp(full_name, "__builtin_time_now") == 0) {
         return val_int((long long)time(NULL));
