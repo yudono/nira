@@ -10,31 +10,32 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <sqlite3.h>
 int nr_argc; char** nr_argv;
 typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_FLOAT, VAL_ERROR } ValueType;
 typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;
 void* nr_alloc(size_t sz) { return calloc(1, sz); }
-struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value* elements; int count; int capacity; }* arr; struct { char** keys; struct Value* values; int count; int capacity; }* obj; } data; } Value;
-#define val_nil() ((Value){.type = VAL_NIL})
-#define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})
-#define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})
-#define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})
+struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value** elements; int count; int capacity; }* arr; struct { char** keys; struct Value** values; int count; int capacity; }* obj; } data; } Value;
+#define val_nil() ({ Value _v; _v.type = VAL_NIL; _v.data.i = 0; _v; })
+#define val_int(v) ({ Value _v; _v.type = VAL_INT; _v.data.i = (long long)(v); _v; })
+#define val_float(v) ({ Value _v; _v.type = VAL_FLOAT; _v.data.f = (double)(v); _v; })
+#define val_bool(b) ({ Value _v; _v.type = VAL_BOOL; _v.data.i = (long long)(b); _v; })
+#define val_error(v) ({ Value _v; _v.type = VAL_ERROR; _v.data.s = (char*)(v); _v; })
+#define val_str_len(str, len) ({ Value _v; _v.type = VAL_STR; _v.length = (len); _v.data.s = (char*)(str); _v; })
 #define val_str(str) val_str_len(str, (str) ? strlen(str) : 0)
-#define val_func(ptr) ((Value){.type = VAL_FUNC, .data.func_ptr = (void*)(ptr)})
+#define val_func(ptr) ({ Value _v; _v.type = VAL_FUNC; _v.data.func_ptr = (void*)(ptr); _v; })
 #define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))
-Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value)*16); return v; }
-Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value)*16); return v; }
+Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value*)*16); return v; }
+Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value*)*16); return v; }
 char* nr_strdup(const char* s) { int l=strlen(s); char* d=nr_alloc(l+1); strcpy(d,s); return d; }
-void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count++] = val; }
-Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return obj.data.obj->values[i]; return val_nil(); }
+void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { *obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count] = malloc(sizeof(Value)); *obj.data.obj->values[obj.data.obj->count++] = val; }
+Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return *obj.data.obj->values[i]; return val_nil(); }
 Value nr_rt_at(Value self, Value obj, Value idx, Value _v2, Value _v3, Value _v4) {
-  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) return obj.data.arr->elements[i]; }
+  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) return *obj.data.arr->elements[i]; }
   if (obj.type == VAL_OBJ && idx.type == VAL_STR) return get_field(obj, idx.data.s);
   return val_nil();
 }
 Value nr_rt_set_at(Value self, Value obj, Value idx, Value val, Value _v3, Value _v4) {
-  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) obj.data.arr->elements[i] = val; }
+  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) *obj.data.arr->elements[i] = val; }
   else if (obj.type == VAL_OBJ && idx.type == VAL_STR) set_field(obj, idx.data.s, val);
   return val_nil();
 }
@@ -50,7 +51,7 @@ Value nr_rt_print(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v
   printf("\n"); fflush(stdout); return val_nil();
 }
 Value nr_rt_len(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if (v.type == VAL_STR) return val_int(strlen(v.data.s)); if (v.type == VAL_ARR) return val_int(v.data.arr->count); return val_int(0); }
-Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_nil(); if(arr.data.arr->count >= arr.data.arr->capacity) { int new_cap = arr.data.arr->capacity * 2; Value* new_elements = malloc(sizeof(Value) * new_cap); memcpy(new_elements, arr.data.arr->elements, sizeof(Value) * arr.data.arr->count); arr.data.arr->elements = new_elements; arr.data.arr->capacity = new_cap; } arr.data.arr->elements[arr.data.arr->count++] = val; return val_nil(); }
+Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_nil(); if(arr.data.arr->count >= arr.data.arr->capacity) { int new_cap = arr.data.arr->capacity * 2; Value** new_elements = malloc(sizeof(Value*) * new_cap); memcpy(new_elements, arr.data.arr->elements, sizeof(Value*) * arr.data.arr->count); arr.data.arr->elements = new_elements; arr.data.arr->capacity = new_cap; } arr.data.arr->elements[arr.data.arr->count] = malloc(sizeof(Value)); *arr.data.arr->elements[arr.data.arr->count++] = val; return val_nil(); }
 Value nr_rt_typeof(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
   if (v.type == VAL_INT) return val_str("int"); if (v.type == VAL_FLOAT) return val_str("float"); if (v.type == VAL_STR) return val_str("string");
   if (v.type == VAL_BOOL) return val_str("bool"); if (v.type == VAL_OBJ) return val_str("object"); if (v.type == VAL_ARR) return val_str("array");
@@ -74,7 +75,7 @@ Value nr_rt_sqrt(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4
 Value nr_rt_max(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av>bv)?av:bv}; } return val_int((a.data.i>b.data.i)?a.data.i:b.data.i); }
 Value nr_rt_min(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av<bv)?av:bv}; } return val_int((a.data.i<b.data.i)?a.data.i:b.data.i); }
 Value nr_rt_abs(Value self, Value n, Value _v1, Value _v2, Value _v3, Value _v4) { if(n.type==VAL_FLOAT) return (Value){.type=VAL_FLOAT,.data.f=fabs(n.data.f)}; return val_int(llabs(n.data.i)); }
-Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], source.data.obj->values[i]); return target; }
+Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], *source.data.obj->values[i]); return target; }
 Value nr_rt_random(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(rand()); }
 Value nr_rt_to_int(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type==VAL_INT) return v; if(v.type==VAL_STR) return val_int(atoll(v.data.s)); return val_int(0); }
 Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
@@ -83,8 +84,8 @@ Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Va
   if(v.type==VAL_BOOL) return val_str(v.data.i ? "true" : "false");
   if(v.type==VAL_NIL) return val_str("null");
   if(v.type==VAL_STR) { char* b=nr_alloc(strlen(v.data.s)+3); sprintf(b, "\"%s\"", v.data.s); return val_str(b); }
-  if(v.type==VAL_ARR) { char* b=nr_strdup("["); for(int i=0; i<v.data.arr->count; i++) { Value item=nr_rt_json_encode(val_nil(), v.data.arr->elements[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(n2, "%s%s%s", b, item.data.s, (i==v.data.arr->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s]", b); return val_str(f); }
-  if(v.type==VAL_OBJ) { char* b=nr_strdup("{"); for(int i=0; i<v.data.obj->count; i++) { Value vl=nr_rt_json_encode(val_nil(), v.data.obj->values[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(v.data.obj->keys[i])+strlen(vl.data.s)+6); sprintf(n2, "%s\"%s\":%s%s", b, v.data.obj->keys[i], vl.data.s, (i==v.data.obj->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s}", b); return val_str(f); }
+  if(v.type==VAL_ARR) { char* b=nr_strdup("["); for(int i=0; i<v.data.arr->count; i++) { Value item=nr_rt_json_encode(val_nil(), *v.data.arr->elements[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(n2, "%s%s%s", b, item.data.s, (i==v.data.arr->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s]", b); return val_str(f); }
+  if(v.type==VAL_OBJ) { char* b=nr_strdup("{"); for(int i=0; i<v.data.obj->count; i++) { Value vl=nr_rt_json_encode(val_nil(), *v.data.obj->values[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(v.data.obj->keys[i])+strlen(vl.data.s)+6); sprintf(n2, "%s\"%s\":%s%s", b, v.data.obj->keys[i], vl.data.s, (i==v.data.obj->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s}", b); return val_str(f); }
   return val_str("null");
 }
 Value nr_rt_json_parse_internal(char** p) {
@@ -149,7 +150,7 @@ Value nr_rt_parse_bool(Value self, Value v, Value _v1, Value _v2, Value _v3, Val
 const char* B64T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 Value nr_rt_to_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); char* res=nr_alloc(4*((l+2)/3)+1); int i=0,j=0; while(i<l){ uint32_t a=v.data.s[i++]; uint32_t b=i<l?v.data.s[i++]:0; uint32_t c=i<l?v.data.s[i++]:0; uint32_t t=(a<<16)|(b<<8)|c; res[j++]=B64T[(t>>18)&0x3F]; res[j++]=B64T[(t>>12)&0x3F]; res[j++]=i>l+1?'=':B64T[(t>>6)&0x3F]; res[j++]=i>l?'=':B64T[t&0x3F]; } res[j]=0; return val_str(res); }
 Value nr_rt_from_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); if(l%4!=0) return val_nil(); int ol=l/4*3; if(v.data.s[l-1]=='=') ol--; if(v.data.s[l-2]=='=') ol--; char* res=nr_alloc(ol+1); static char dt[256]; static int built=0; if(!built){ for(int i=0;i<64;i++) dt[(unsigned char)B64T[i]]=i; built=1; } int i=0,j=0; while(i<l){ uint32_t a=dt[(unsigned char)v.data.s[i++]]; uint32_t b=dt[(unsigned char)v.data.s[i++]]; uint32_t c=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t d=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t t=(a<<18)|(b<<12)|(c<<6)|d; if(j<ol) res[j++]=(t>>16)&0xFF; if(j<ol) res[j++]=(t>>8)&0xFF; if(j<ol) res[j++]=t&0xFF; } res[ol]=0; return val_str(res); }
-Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if(res.data.arr->elements[j].type==v.type && res.data.arr->elements[j].data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
+Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=*arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if((*res.data.arr->elements[j]).type==v.type && (*res.data.arr->elements[j]).data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
 Value nr_rt_keys(Value self, Value obj, Value _v1, Value _v2, Value _v3, Value _v4) { if(obj.type!=VAL_OBJ) return val_arr(); Value res=val_arr(); for(int i=0;i<obj.data.obj->count;i++) if(obj.data.obj->keys[i]) nr_rt_push(val_nil(), res, val_str(nr_strdup(obj.data.obj->keys[i])), val_nil(), val_nil(), val_nil()); return res; }
 
 Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Value _v4, Value _v5) {
@@ -189,7 +190,7 @@ Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Valu
     Value res_v=val_nil(); int matched=0;
     if(routes_v.type==VAL_ARR) {
       for(int ri=0;ri<routes_v.data.arr->count;ri++) {
-        Value route=routes_v.data.arr->elements[ri]; if(route.type!=VAL_OBJ) continue;
+        Value route=*routes_v.data.arr->elements[ri]; if(route.type!=VAL_OBJ) continue;
         Value rm=get_field(route,"method"),rp=get_field(route,"path"),rh=get_field(route,"handler");
         if(rm.type!=VAL_STR||rp.type!=VAL_STR||strcmp(rm.data.s,m)!=0) continue;
         int pm=0; if(strcmp(rp.data.s,p)==0) pm=1;
@@ -262,13 +263,51 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "array") == 0) { Value m = val_obj(); set_field(m, "push", val_func(nr_rt_push)); return m; }
   return val_obj();
 }
+Value nr_max(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_min(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_abs(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_sum(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_sqrt(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_pow(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_sin(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_cos(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_random(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
 Value nr_getName(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+
+Value nr_v_max;
+Value nr_v_a;
+Value nr_v_b;
+Value nr_v_min;
+Value nr_v_abs;
+Value nr_v_n;
+Value nr_v_sum;
+Value nr_v_items;
+Value nr_v_total;
+Value nr_v_item;
+Value nr_v_sqrt;
+Value nr_v___builtin_math_sqrt;
+Value nr_v_pow;
+Value nr_v_e;
+Value nr_v___builtin_math_pow;
+Value nr_v_sin;
+Value nr_v___builtin_math_sin;
+Value nr_v_cos;
+Value nr_v___builtin_math_cos;
+Value nr_v_random;
+Value nr_v___builtin_random;
+Value nr_v_m;
+Value nr_v_print;
+Value nr_v_user;
+Value nr_v_userName;
+Value nr_v_id;
+Value nr_v_users;
+Value nr_v_u;
+Value nr_v_getName;
+Value nr_v_net;
 Value nr_v_start;
 Value nr_v_end;
-Value nr_v_sum;
 long long nr_v_i;
 long long nr_v_j;
-Value nr_v_n;
 Value nr_v_temp;
 char* nr_v_s; int nr_v_s_len;
 Value nr_v_result;
@@ -279,16 +318,91 @@ Value nr_v_toInt;
 Value nr_v_json;
 Value nr_v_file;
 Value nr_v_http;
-Value nr_v_m;
-Value nr_v_user;
-Value nr_v_userName;
-Value nr_v_id;
-Value nr_v_users;
-Value nr_v_u;
-Value nr_v_getName;
-Value nr_v_net;
+Value nr_max(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_a;
+  nr_v_a = _v0; if(nr_v_a.type == VAL_NIL) { }
+  Value nr_v_b;
+  nr_v_b = _v1; if(nr_v_b.type == VAL_NIL) { }
+  { long long* _e1 = &nr_v_arr_unboxed[nr_v_j]; long long* _e2 = &nr_v_arr_unboxed[nr_v_j + 1]; long long _v1 = *_e1; long long _v2 = *_e2; int _c = _v1 > _v2; *_e1 = _c ? _v2 : _v1; *_e2 = _c ? _v1 : _v2; };
+  return nr_v_b;
+  return val_nil();
+}
+Value nr_min(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_a;
+  nr_v_a = _v0; if(nr_v_a.type == VAL_NIL) { }
+  Value nr_v_b;
+  nr_v_b = _v1; if(nr_v_b.type == VAL_NIL) { }
+  if (((nr_v_a).data.i < (nr_v_b).data.i)) {
+  return nr_v_a;
+  };
+  return nr_v_b;
+  return val_nil();
+}
+Value nr_abs(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_n;
+  nr_v_n = _v0; if(nr_v_n.type == VAL_NIL) { }
+  if (((nr_v_n).data.i < 0LL)) {
+  return val_int((0LL - (nr_v_n).data.i));
+  };
+  return nr_v_n;
+  return val_nil();
+}
+Value nr_sum(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_items;
+  nr_v_items = _v0; if(nr_v_items.type == VAL_NIL) { }
+  nr_v_total = val_int(0);
+  { Value _iter = nr_v_items; if (_iter.type == VAL_ARR) {
+    for (int _i = 0; _i < _iter.data.arr->count; _i++) {
+      nr_v_item = *_iter.data.arr->elements[_i];
+  nr_v_total = nr_rt_add(nr_v_total, nr_v_item);
+    }
+  } }
+;
+  return nr_v_total;
+  return val_nil();
+}
+Value nr_sqrt(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_n;
+  nr_v_n = _v0; if(nr_v_n.type == VAL_NIL) { }
+  return nr_rt_sqrt(val_nil(), nr_v_n, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_pow(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_b;
+  nr_v_b = _v0; if(nr_v_b.type == VAL_NIL) { }
+  Value nr_v_e;
+  nr_v_e = _v1; if(nr_v_e.type == VAL_NIL) { }
+  return val_int(pow((nr_v_b).data.i, (nr_v_e).data.i));
+  return val_nil();
+}
+Value nr_sin(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_n;
+  nr_v_n = _v0; if(nr_v_n.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_math_sin; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_n, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_cos(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_n;
+  nr_v_n = _v0; if(nr_v_n.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_math_cos; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_n, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_random(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  return ({ Value _f = nr_v___builtin_random; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
 Value nr_getName(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
   long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_u;
   nr_v_u = _v0; if(nr_v_u.type == VAL_NIL) { }
   return nr_rt_at(val_nil(), nr_v_u, val_str("name"), val_nil(), val_nil(), val_nil());
   return val_nil();
@@ -297,12 +411,40 @@ int main(int argc, char** argv) {
   long long nr_v_i=0, nr_v_j=0;
   size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); nr_arena->heap_start = malloc(heap_size); nr_arena->current = nr_arena->heap_start;
   nr_argc = argc; nr_argv = argv;
+  nr_v_max = val_nil();
+  nr_v_a = val_nil();
+  nr_v_b = val_nil();
+  nr_v_min = val_nil();
+  nr_v_abs = val_nil();
+  nr_v_n = val_nil();
+  nr_v_sum = val_nil();
+  nr_v_items = val_nil();
+  nr_v_total = val_nil();
+  nr_v_item = val_nil();
+  nr_v_sqrt = val_nil();
+  nr_v___builtin_math_sqrt = val_nil();
+  nr_v_pow = val_nil();
+  nr_v_e = val_nil();
+  nr_v___builtin_math_pow = val_nil();
+  nr_v_sin = val_nil();
+  nr_v___builtin_math_sin = val_nil();
+  nr_v_cos = val_nil();
+  nr_v___builtin_math_cos = val_nil();
+  nr_v_random = val_nil();
+  nr_v___builtin_random = val_nil();
+  nr_v_m = val_nil();
+  nr_v_print = val_nil();
+  nr_v_user = val_nil();
+  nr_v_userName = val_nil();
+  nr_v_id = val_nil();
+  nr_v_users = val_nil();
+  nr_v_u = val_nil();
+  nr_v_getName = val_nil();
+  nr_v_net = val_nil();
   nr_v_start = val_nil();
   nr_v_end = val_nil();
-  nr_v_sum = val_nil();
   nr_v_i = 0;
   nr_v_j = 0;
-  nr_v_n = val_nil();
   nr_v_temp = val_nil();
   nr_v_s = malloc(10 * 1024 * 1024); nr_v_s_len = 0;
   nr_v_result = val_nil();
@@ -313,23 +455,35 @@ int main(int argc, char** argv) {
   nr_v_json = val_nil();
   nr_v_file = val_nil();
   nr_v_http = val_nil();
-  nr_v_m = val_nil();
-  nr_v_user = val_nil();
-  nr_v_userName = val_nil();
-  nr_v_id = val_nil();
-  nr_v_users = val_nil();
-  nr_v_u = val_nil();
-  nr_v_getName = val_nil();
-  nr_v_net = val_nil();
   nr_v_toInt = val_func(nr_rt_to_int);
   nr_v_json = nr_rt_load_module("json");
   nr_v_file = nr_rt_load_module("file");
   nr_v_http = nr_rt_load_module("http");
+  nr_v_max = val_func(nr_max);
+  nr_v_min = val_func(nr_min);
+  nr_v_abs = val_func(nr_abs);
+  nr_v_sum = val_func(nr_sum);
+  nr_v_sqrt = val_func(nr_sqrt);
+  nr_v_pow = val_func(nr_pow);
+  nr_v_sin = val_func(nr_sin);
+  nr_v_cos = val_func(nr_cos);
+  nr_v_random = val_func(nr_random);
+  nr_v_getName = val_func(nr_getName);
 val_nil();
-  nr_v_m = nr_rt_load_module("math");
+  { Value _m = val_obj();
+    set_field(_m, "max", val_func(nr_max));
+    set_field(_m, "min", val_func(nr_min));
+    set_field(_m, "abs", val_func(nr_abs));
+    set_field(_m, "sum", val_func(nr_sum));
+    set_field(_m, "sqrt", val_func(nr_sqrt));
+    set_field(_m, "pow", val_func(nr_pow));
+    set_field(_m, "sin", val_func(nr_sin));
+    set_field(_m, "cos", val_func(nr_cos));
+    set_field(_m, "random", val_func(nr_random));
+    nr_v_m = _m; }
 ;
 ({ nr_rt_print(val_nil(), val_str("Namespace Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ nr_rt_print(val_nil(), ({ Value _f = get_field(nr_v_m, "max"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_m, val_int(5), val_int(1), val_nil(), val_nil(), val_nil()) : val_nil(); }), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
+({ nr_rt_print(val_nil(), ({ Value _f = get_field(nr_v_m, "max"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_m, val_int(5), val_int(1), val_nil(), val_nil(), val_nil()) : nr_max(nr_v_m, val_int(5), val_int(1), val_nil(), val_nil(), val_nil()); }), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   nr_v_user = ({ Value _o = val_obj(); set_field(_o, "id", val_int(1)); set_field(_o, "name", val_str("Budi")); _o; });
   { Value _d = nr_v_user;
     nr_v_userName = get_field(_d, "name");
@@ -343,7 +497,7 @@ val_nil();
 ({ nr_rt_print(val_nil(), val_str("Loop Alias Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   { Value _iter = nr_v_users; if (_iter.type == VAL_ARR) {
     for (int _i = 0; _i < _iter.data.arr->count; _i++) {
-      nr_v_u = _iter.data.arr->elements[_i];
+      nr_v_u = *_iter.data.arr->elements[_i];
 ({ nr_rt_print(val_nil(), nr_rt_at(val_nil(), nr_v_u, val_str("name"), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
     }
   } }
@@ -353,6 +507,6 @@ val_func(nr_getName);
 ({ nr_rt_print(val_nil(), ({ Value _f = get_field(nr_v_user, "getName"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_user, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()) : nr_getName(nr_v_user, val_nil(), val_nil(), val_nil(), val_nil(), val_nil()); }), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   nr_v_net = nr_v_m;
 ({ nr_rt_print(val_nil(), val_str("Standalone Alias Test:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ nr_rt_print(val_nil(), ({ Value _f = get_field(nr_v_net, "max"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_net, val_int(100), val_int(200), val_nil(), val_nil(), val_nil()) : val_nil(); }), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
+({ nr_rt_print(val_nil(), ({ Value _f = get_field(nr_v_net, "max"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_net, val_int(100), val_int(200), val_nil(), val_nil(), val_nil()) : nr_max(nr_v_net, val_int(100), val_int(200), val_nil(), val_nil(), val_nil()); }), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   return 0; 
 }

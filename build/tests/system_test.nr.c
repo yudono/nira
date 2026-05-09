@@ -10,31 +10,32 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <sqlite3.h>
 int nr_argc; char** nr_argv;
 typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_FLOAT, VAL_ERROR } ValueType;
 typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;
 void* nr_alloc(size_t sz) { return calloc(1, sz); }
-struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value* elements; int count; int capacity; }* arr; struct { char** keys; struct Value* values; int count; int capacity; }* obj; } data; } Value;
-#define val_nil() ((Value){.type = VAL_NIL})
-#define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})
-#define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})
-#define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})
+struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value** elements; int count; int capacity; }* arr; struct { char** keys; struct Value** values; int count; int capacity; }* obj; } data; } Value;
+#define val_nil() ({ Value _v; _v.type = VAL_NIL; _v.data.i = 0; _v; })
+#define val_int(v) ({ Value _v; _v.type = VAL_INT; _v.data.i = (long long)(v); _v; })
+#define val_float(v) ({ Value _v; _v.type = VAL_FLOAT; _v.data.f = (double)(v); _v; })
+#define val_bool(b) ({ Value _v; _v.type = VAL_BOOL; _v.data.i = (long long)(b); _v; })
+#define val_error(v) ({ Value _v; _v.type = VAL_ERROR; _v.data.s = (char*)(v); _v; })
+#define val_str_len(str, len) ({ Value _v; _v.type = VAL_STR; _v.length = (len); _v.data.s = (char*)(str); _v; })
 #define val_str(str) val_str_len(str, (str) ? strlen(str) : 0)
-#define val_func(ptr) ((Value){.type = VAL_FUNC, .data.func_ptr = (void*)(ptr)})
+#define val_func(ptr) ({ Value _v; _v.type = VAL_FUNC; _v.data.func_ptr = (void*)(ptr); _v; })
 #define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))
-Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value)*16); return v; }
-Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value)*16); return v; }
+Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value*)*16); return v; }
+Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value*)*16); return v; }
 char* nr_strdup(const char* s) { int l=strlen(s); char* d=nr_alloc(l+1); strcpy(d,s); return d; }
-void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count++] = val; }
-Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return obj.data.obj->values[i]; return val_nil(); }
+void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { *obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count] = malloc(sizeof(Value)); *obj.data.obj->values[obj.data.obj->count++] = val; }
+Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return *obj.data.obj->values[i]; return val_nil(); }
 Value nr_rt_at(Value self, Value obj, Value idx, Value _v2, Value _v3, Value _v4) {
-  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) return obj.data.arr->elements[i]; }
+  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) return *obj.data.arr->elements[i]; }
   if (obj.type == VAL_OBJ && idx.type == VAL_STR) return get_field(obj, idx.data.s);
   return val_nil();
 }
 Value nr_rt_set_at(Value self, Value obj, Value idx, Value val, Value _v3, Value _v4) {
-  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) obj.data.arr->elements[i] = val; }
+  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) *obj.data.arr->elements[i] = val; }
   else if (obj.type == VAL_OBJ && idx.type == VAL_STR) set_field(obj, idx.data.s, val);
   return val_nil();
 }
@@ -50,7 +51,7 @@ Value nr_rt_print(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v
   printf("\n"); fflush(stdout); return val_nil();
 }
 Value nr_rt_len(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if (v.type == VAL_STR) return val_int(strlen(v.data.s)); if (v.type == VAL_ARR) return val_int(v.data.arr->count); return val_int(0); }
-Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_nil(); if(arr.data.arr->count >= arr.data.arr->capacity) { int new_cap = arr.data.arr->capacity * 2; Value* new_elements = malloc(sizeof(Value) * new_cap); memcpy(new_elements, arr.data.arr->elements, sizeof(Value) * arr.data.arr->count); arr.data.arr->elements = new_elements; arr.data.arr->capacity = new_cap; } arr.data.arr->elements[arr.data.arr->count++] = val; return val_nil(); }
+Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_nil(); if(arr.data.arr->count >= arr.data.arr->capacity) { int new_cap = arr.data.arr->capacity * 2; Value** new_elements = malloc(sizeof(Value*) * new_cap); memcpy(new_elements, arr.data.arr->elements, sizeof(Value*) * arr.data.arr->count); arr.data.arr->elements = new_elements; arr.data.arr->capacity = new_cap; } arr.data.arr->elements[arr.data.arr->count] = malloc(sizeof(Value)); *arr.data.arr->elements[arr.data.arr->count++] = val; return val_nil(); }
 Value nr_rt_typeof(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
   if (v.type == VAL_INT) return val_str("int"); if (v.type == VAL_FLOAT) return val_str("float"); if (v.type == VAL_STR) return val_str("string");
   if (v.type == VAL_BOOL) return val_str("bool"); if (v.type == VAL_OBJ) return val_str("object"); if (v.type == VAL_ARR) return val_str("array");
@@ -74,7 +75,7 @@ Value nr_rt_sqrt(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4
 Value nr_rt_max(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av>bv)?av:bv}; } return val_int((a.data.i>b.data.i)?a.data.i:b.data.i); }
 Value nr_rt_min(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av<bv)?av:bv}; } return val_int((a.data.i<b.data.i)?a.data.i:b.data.i); }
 Value nr_rt_abs(Value self, Value n, Value _v1, Value _v2, Value _v3, Value _v4) { if(n.type==VAL_FLOAT) return (Value){.type=VAL_FLOAT,.data.f=fabs(n.data.f)}; return val_int(llabs(n.data.i)); }
-Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], source.data.obj->values[i]); return target; }
+Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], *source.data.obj->values[i]); return target; }
 Value nr_rt_random(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(rand()); }
 Value nr_rt_to_int(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type==VAL_INT) return v; if(v.type==VAL_STR) return val_int(atoll(v.data.s)); return val_int(0); }
 Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
@@ -83,8 +84,8 @@ Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Va
   if(v.type==VAL_BOOL) return val_str(v.data.i ? "true" : "false");
   if(v.type==VAL_NIL) return val_str("null");
   if(v.type==VAL_STR) { char* b=nr_alloc(strlen(v.data.s)+3); sprintf(b, "\"%s\"", v.data.s); return val_str(b); }
-  if(v.type==VAL_ARR) { char* b=nr_strdup("["); for(int i=0; i<v.data.arr->count; i++) { Value item=nr_rt_json_encode(val_nil(), v.data.arr->elements[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(n2, "%s%s%s", b, item.data.s, (i==v.data.arr->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s]", b); return val_str(f); }
-  if(v.type==VAL_OBJ) { char* b=nr_strdup("{"); for(int i=0; i<v.data.obj->count; i++) { Value vl=nr_rt_json_encode(val_nil(), v.data.obj->values[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(v.data.obj->keys[i])+strlen(vl.data.s)+6); sprintf(n2, "%s\"%s\":%s%s", b, v.data.obj->keys[i], vl.data.s, (i==v.data.obj->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s}", b); return val_str(f); }
+  if(v.type==VAL_ARR) { char* b=nr_strdup("["); for(int i=0; i<v.data.arr->count; i++) { Value item=nr_rt_json_encode(val_nil(), *v.data.arr->elements[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(n2, "%s%s%s", b, item.data.s, (i==v.data.arr->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s]", b); return val_str(f); }
+  if(v.type==VAL_OBJ) { char* b=nr_strdup("{"); for(int i=0; i<v.data.obj->count; i++) { Value vl=nr_rt_json_encode(val_nil(), *v.data.obj->values[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(v.data.obj->keys[i])+strlen(vl.data.s)+6); sprintf(n2, "%s\"%s\":%s%s", b, v.data.obj->keys[i], vl.data.s, (i==v.data.obj->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s}", b); return val_str(f); }
   return val_str("null");
 }
 Value nr_rt_json_parse_internal(char** p) {
@@ -149,7 +150,7 @@ Value nr_rt_parse_bool(Value self, Value v, Value _v1, Value _v2, Value _v3, Val
 const char* B64T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 Value nr_rt_to_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); char* res=nr_alloc(4*((l+2)/3)+1); int i=0,j=0; while(i<l){ uint32_t a=v.data.s[i++]; uint32_t b=i<l?v.data.s[i++]:0; uint32_t c=i<l?v.data.s[i++]:0; uint32_t t=(a<<16)|(b<<8)|c; res[j++]=B64T[(t>>18)&0x3F]; res[j++]=B64T[(t>>12)&0x3F]; res[j++]=i>l+1?'=':B64T[(t>>6)&0x3F]; res[j++]=i>l?'=':B64T[t&0x3F]; } res[j]=0; return val_str(res); }
 Value nr_rt_from_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); if(l%4!=0) return val_nil(); int ol=l/4*3; if(v.data.s[l-1]=='=') ol--; if(v.data.s[l-2]=='=') ol--; char* res=nr_alloc(ol+1); static char dt[256]; static int built=0; if(!built){ for(int i=0;i<64;i++) dt[(unsigned char)B64T[i]]=i; built=1; } int i=0,j=0; while(i<l){ uint32_t a=dt[(unsigned char)v.data.s[i++]]; uint32_t b=dt[(unsigned char)v.data.s[i++]]; uint32_t c=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t d=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t t=(a<<18)|(b<<12)|(c<<6)|d; if(j<ol) res[j++]=(t>>16)&0xFF; if(j<ol) res[j++]=(t>>8)&0xFF; if(j<ol) res[j++]=t&0xFF; } res[ol]=0; return val_str(res); }
-Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if(res.data.arr->elements[j].type==v.type && res.data.arr->elements[j].data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
+Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=*arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if((*res.data.arr->elements[j]).type==v.type && (*res.data.arr->elements[j]).data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
 Value nr_rt_keys(Value self, Value obj, Value _v1, Value _v2, Value _v3, Value _v4) { if(obj.type!=VAL_OBJ) return val_arr(); Value res=val_arr(); for(int i=0;i<obj.data.obj->count;i++) if(obj.data.obj->keys[i]) nr_rt_push(val_nil(), res, val_str(nr_strdup(obj.data.obj->keys[i])), val_nil(), val_nil(), val_nil()); return res; }
 
 Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Value _v4, Value _v5) {
@@ -189,7 +190,7 @@ Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Valu
     Value res_v=val_nil(); int matched=0;
     if(routes_v.type==VAL_ARR) {
       for(int ri=0;ri<routes_v.data.arr->count;ri++) {
-        Value route=routes_v.data.arr->elements[ri]; if(route.type!=VAL_OBJ) continue;
+        Value route=*routes_v.data.arr->elements[ri]; if(route.type!=VAL_OBJ) continue;
         Value rm=get_field(route,"method"),rp=get_field(route,"path"),rh=get_field(route,"handler");
         if(rm.type!=VAL_STR||rp.type!=VAL_STR||strcmp(rm.data.s,m)!=0) continue;
         int pm=0; if(strcmp(rp.data.s,p)==0) pm=1;
@@ -262,7 +263,48 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "array") == 0) { Value m = val_obj(); set_field(m, "push", val_func(nr_rt_push)); return m; }
   return val_obj();
 }
+Value nr_read(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_write(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_remove(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_append(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_exists(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_copy(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_move(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_args(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_now(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_run(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_exit(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
 Value nr_greet(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+
+Value nr_v_read;
+Value nr_v_path;
+Value nr_v___builtin_file_read;
+Value nr_v_write;
+Value nr_v_content;
+Value nr_v___builtin_file_write;
+Value nr_v_remove;
+Value nr_v___builtin_file_delete;
+Value nr_v_append;
+Value nr_v_existing;
+Value nr_v_exists;
+Value nr_v___builtin_file_exists;
+Value nr_v_copy;
+Value nr_v_src;
+Value nr_v_dest;
+Value nr_v_data;
+Value nr_v_move;
+Value nr_v_args;
+Value nr_v___builtin_args;
+Value nr_v_now;
+Value nr_v___builtin_time_now;
+Value nr_v_run;
+Value nr_v_cmd;
+Value nr_v___builtin_sys_run;
+Value nr_v_exit;
+Value nr_v_code;
+Value nr_v___builtin_exit_proc;
+Value nr_v_greet;
+Value nr_v_print;
 Value nr_v_start;
 Value nr_v_end;
 Value nr_v_sum;
@@ -279,15 +321,94 @@ Value nr_v_toInt;
 Value nr_v_json;
 Value nr_v_file;
 Value nr_v_http;
-Value nr_v_write;
-Value nr_v_read;
-Value nr_v_remove;
-Value nr_v_run;
-Value nr_v_greet;
-Value nr_v_data;
-Value nr_v_content;
+Value nr_read(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_path;
+  nr_v_path = _v0; if(nr_v_path.type == VAL_NIL) { }
+  return nr_rt_file_read(val_nil(), nr_v_path, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_write(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_path;
+  nr_v_path = _v0; if(nr_v_path.type == VAL_NIL) { }
+  Value nr_v_content;
+  nr_v_content = _v1; if(nr_v_content.type == VAL_NIL) { }
+  return nr_rt_file_write(val_nil(), nr_v_path, nr_v_content, val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_remove(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_path;
+  nr_v_path = _v0; if(nr_v_path.type == VAL_NIL) { }
+  return nr_rt_file_delete(val_nil(), nr_v_path, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_append(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_path;
+  nr_v_path = _v0; if(nr_v_path.type == VAL_NIL) { }
+  Value nr_v_content;
+  nr_v_content = _v1; if(nr_v_content.type == VAL_NIL) { }
+  nr_v_existing = nr_rt_file_read(val_nil(), nr_v_path, val_nil(), val_nil(), val_nil(), val_nil());
+  return nr_rt_file_write(val_nil(), nr_v_path, nr_rt_add(nr_v_existing, nr_v_content), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_exists(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_path;
+  nr_v_path = _v0; if(nr_v_path.type == VAL_NIL) { }
+  return nr_rt_file_exists(val_nil(), nr_v_path, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_copy(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_src;
+  nr_v_src = _v0; if(nr_v_src.type == VAL_NIL) { }
+  Value nr_v_dest;
+  nr_v_dest = _v1; if(nr_v_dest.type == VAL_NIL) { }
+  nr_v_data = nr_rt_file_read(val_nil(), nr_v_src, val_nil(), val_nil(), val_nil(), val_nil());
+  return nr_rt_file_write(val_nil(), nr_v_dest, nr_v_data, val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_move(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_src;
+  nr_v_src = _v0; if(nr_v_src.type == VAL_NIL) { }
+  Value nr_v_dest;
+  nr_v_dest = _v1; if(nr_v_dest.type == VAL_NIL) { }
+  nr_v_data = nr_rt_file_read(val_nil(), nr_v_src, val_nil(), val_nil(), val_nil(), val_nil());
+nr_rt_file_write(val_nil(), nr_v_dest, nr_v_data, val_nil(), val_nil(), val_nil());
+  return nr_rt_file_delete(val_nil(), nr_v_src, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_args(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  return nr_rt_args(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_now(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  return nr_rt_now(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_run(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_cmd;
+  nr_v_cmd = _v0; if(nr_v_cmd.type == VAL_NIL) { }
+  return nr_rt_sys_run(val_nil(), nr_v_cmd, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_exit(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_code;
+  nr_v_code = _v0; if(nr_v_code.type == VAL_NIL) { }
+nr_rt_exit(val_nil(), nr_v_code, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
 Value nr_greet(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
   long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_data;
   nr_v_data = _v0; if(nr_v_data.type == VAL_NIL) { }
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Hello "), nr_rt_at(val_nil(), nr_v_data, val_str("name"), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Age "), nr_rt_at(val_nil(), nr_v_data, val_str("age"), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
@@ -298,6 +419,35 @@ int main(int argc, char** argv) {
   long long nr_v_i=0, nr_v_j=0;
   size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); nr_arena->heap_start = malloc(heap_size); nr_arena->current = nr_arena->heap_start;
   nr_argc = argc; nr_argv = argv;
+  nr_v_read = val_nil();
+  nr_v_path = val_nil();
+  nr_v___builtin_file_read = val_nil();
+  nr_v_write = val_nil();
+  nr_v_content = val_nil();
+  nr_v___builtin_file_write = val_nil();
+  nr_v_remove = val_nil();
+  nr_v___builtin_file_delete = val_nil();
+  nr_v_append = val_nil();
+  nr_v_existing = val_nil();
+  nr_v_exists = val_nil();
+  nr_v___builtin_file_exists = val_nil();
+  nr_v_copy = val_nil();
+  nr_v_src = val_nil();
+  nr_v_dest = val_nil();
+  nr_v_data = val_nil();
+  nr_v_move = val_nil();
+  nr_v_args = val_nil();
+  nr_v___builtin_args = val_nil();
+  nr_v_now = val_nil();
+  nr_v___builtin_time_now = val_nil();
+  nr_v_run = val_nil();
+  nr_v_cmd = val_nil();
+  nr_v___builtin_sys_run = val_nil();
+  nr_v_exit = val_nil();
+  nr_v_code = val_nil();
+  nr_v___builtin_exit_proc = val_nil();
+  nr_v_greet = val_nil();
+  nr_v_print = val_nil();
   nr_v_start = val_nil();
   nr_v_end = val_nil();
   nr_v_sum = val_nil();
@@ -314,28 +464,46 @@ int main(int argc, char** argv) {
   nr_v_json = val_nil();
   nr_v_file = val_nil();
   nr_v_http = val_nil();
-  nr_v_write = val_nil();
-  nr_v_read = val_nil();
-  nr_v_remove = val_nil();
-  nr_v_run = val_nil();
-  nr_v_greet = val_nil();
-  nr_v_data = val_nil();
-  nr_v_content = val_nil();
   nr_v_toInt = val_func(nr_rt_to_int);
   nr_v_json = nr_rt_load_module("json");
   nr_v_file = nr_rt_load_module("file");
   nr_v_http = nr_rt_load_module("http");
-  { Value _m = nr_rt_load_module("file"); nr_v_write = get_field(_m, "write"); nr_v_read = get_field(_m, "read"); nr_v_remove = get_field(_m, "remove"); }
+  nr_v_read = val_func(nr_read);
+  nr_v_write = val_func(nr_write);
+  nr_v_remove = val_func(nr_remove);
+  nr_v_append = val_func(nr_append);
+  nr_v_exists = val_func(nr_exists);
+  nr_v_copy = val_func(nr_copy);
+  nr_v_move = val_func(nr_move);
+  nr_v_args = val_func(nr_args);
+  nr_v_now = val_func(nr_now);
+  nr_v_run = val_func(nr_run);
+  nr_v_exit = val_func(nr_exit);
+  nr_v_greet = val_func(nr_greet);
+  { Value _m = val_obj();
+    set_field(_m, "read", val_func(nr_read));
+    set_field(_m, "write", val_func(nr_write));
+    set_field(_m, "remove", val_func(nr_remove));
+    set_field(_m, "append", val_func(nr_append));
+    set_field(_m, "exists", val_func(nr_exists));
+    set_field(_m, "copy", val_func(nr_copy));
+    set_field(_m, "move", val_func(nr_move));
+    nr_v_write = get_field(_m, "write");     nr_v_read = get_field(_m, "read");     nr_v_remove = get_field(_m, "remove");   }
 ;
-  { Value _m = nr_rt_load_module("sys"); nr_v_run = get_field(_m, "run"); }
+  { Value _m = val_obj();
+    set_field(_m, "args", val_func(nr_args));
+    set_field(_m, "now", val_func(nr_now));
+    set_field(_m, "run", val_func(nr_run));
+    set_field(_m, "exit", val_func(nr_exit));
+    nr_v_run = get_field(_m, "run");   }
 ;
 val_func(nr_greet);
 val_nil();
 nr_greet(val_nil(), ({ Value _o = val_obj(); set_field(_o, "name", val_str("Budi")); set_field(_o, "age", val_str("25")); _o; }), val_nil(), val_nil(), val_nil(), val_nil());
-({ Value _f = nr_v_write; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_str("Hello from Nira!"), val_nil(), val_nil(), val_nil()) : val_nil(); });
-  nr_v_content = ({ Value _f = nr_v_read; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+nr_write(val_nil(), val_str("test.txt"), val_str("Hello from Nira!"), val_nil(), val_nil(), val_nil());
+  nr_v_content = nr_read(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil());
 ({ nr_rt_print(val_nil(), nr_v_content, val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
-({ Value _f = nr_v_run; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("ls -l test.txt"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
-({ Value _f = nr_v_remove; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+nr_run(val_nil(), val_str("ls -l test.txt"), val_nil(), val_nil(), val_nil(), val_nil());
+nr_remove(val_nil(), val_str("test.txt"), val_nil(), val_nil(), val_nil(), val_nil());
   return 0; 
 }

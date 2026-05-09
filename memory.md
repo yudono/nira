@@ -29,6 +29,13 @@ Kami baru saja menyelesaikan perombakan arsitektur besar-besaran untuk mencapai 
 - **Arena-Backed Objects**: Modul seperti `time` dan `math` kini mengembalikan obyek yang terdaftar di Arena, memudahkan manajemen siklus hidup obyek tanpa manual free.
 - **In-Place Serializer**: Encoder JSON dan printer obyek menggunakan buffer Arena untuk membangun string hasil tanpa alokasi per-elemen.
 
+### 6. Universal Module System & FFI Integration (Unified Runtime)
+- **Recursive Dependency Resolution**: Nira's AOT compiler kini melakukan *full recursive parsing* pada graf `import`. Ini memungkinkan hierarki modul yang kompleks untuk digabungkan menjadi satu unit C yang sangat optimal.
+- **Dynamic Native Injection**: Melalui blok `native:` di modul Nira, header C (`header:`), linker flags (`link:`), dan raw C source (`code:`) dikumpulkan secara dinamis. Ini memungkinkan library seperti `sqlite3` digunakan sebagai modul standar tanpa konfigurasi manual.
+- **FFI Calling Parity**: Panggilan fungsi `extern` kini sinkron antara interpreter (menggunakan `dlopen`/`dlsym`) dan AOT compiler (menggunakan static linking). Ini memastikan kode yang sama berjalan identik di kedua mode tanpa modifikasi.
+- **Modular Prototype Ordering**: Transpiler secara otomatis mengumpulkan semua prototipe fungsi dari seluruh graf dependensi dan meletakkannya di bagian atas file C untuk mencegah kesalahan forward-declaration.
+- **Symbol Resolution Stability**: Mekanisme koleksi simbol global kini mencakup seluruh AST, memastikan semua referensi variabel, built-ins (seperti `__builtin_math_sin`), dan fungsi anonim (lambda) dideklarasikan dengan benar dalam scope global C. Ini menghilangkan error *undeclared identifier* pada proyek skala besar.
+
 ---
 
 ## 🚀 Status Benchmarks (Compiled Mode - Stabilized)

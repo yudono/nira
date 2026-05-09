@@ -25,10 +25,11 @@ Nira achieves sub-5ms performance through surgical architectural optimizations:
 ## 📑 Features
 
 - **Clean Syntax**: Indentation-based blocks (Python-like).
-- **Native FFI**: Seamless integration with C via JIT-compiled `native:` blocks.
+- **Native FFI**: Seamless integration with C via dynamic `native:` blocks and JIT-compatible `extern` resolution.
 - **Fast**: Record-breaking execution speeds via `nira build`.
-- **Modular**: Robust `import`/`export` system with package management.
-- **Zero Leak Memory**: Managed via a high-speed Arena Allocator with checkpoint/rollback.
+- **Modular**: Advanced recursive `import` system with dynamic native dependency injection.
+- **Unified Testing**: Guaranteed parity between interpreter and compiler via `nira test -b`.
+- **Zero Leak Memory**: Managed via a high-speed Arena Allocator with near-zero overhead.
 
 ## 📦 Standard Library
 
@@ -40,6 +41,7 @@ Nira comes with a comprehensive standard library designed for modern application
 - **time**: Timestamps, formatting, and precision sleep.
 - **os/path**: Environment, process control, and path manipulation.
 - **net/http**: Zero-dependency HTTP client/server and networking.
+- **db/sql**: High-performance modular database adapters (SQLite, etc.).
 - **encoding**: Native support for JSON, Base64, Hex, and CSV.
 - **crypto**: Secure hashing (SHA256, etc.) and HMAC.
 - **sync/async**: Modern concurrency with spawn, mutex, and channels.

@@ -4,21 +4,11 @@ native:
   code: """
     #include <sqlite3.h>
     #include <string.h>
-    #include <stdio.h>
 
     Value nira_sqlite3_open(Value self, Value path, Value _v2, Value _v3, Value _v4, Value _v5) {
-        if (path.type != VAL_STR) {
-            printf("FFI: path is not a string!\\n");
-            return val_nil();
-        }
-        printf("FFI: opening database: %s\\n", path.data.s);
+        if (path.type != VAL_STR) return val_nil();
         sqlite3 *db;
-        int rc = sqlite3_open(path.data.s, &db);
-        if (rc != SQLITE_OK) {
-            printf("FFI: sqlite3_open failed with rc=%d\\n", rc);
-            return val_nil();
-        }
-        printf("FFI: database opened successfully, pointer: %p\\n", db);
+        if (sqlite3_open(path.data.s, &db) != SQLITE_OK) return val_nil();
         return val_int((long long)db);
     }
 

@@ -10,31 +10,32 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
-#include <sqlite3.h>
 int nr_argc; char** nr_argv;
 typedef enum { VAL_NIL, VAL_INT, VAL_STR, VAL_OBJ, VAL_ARR, VAL_BOOL, VAL_FUNC, VAL_FLOAT, VAL_ERROR } ValueType;
 typedef struct { char* heap_start; char* heap_end; char* current; } Arena; Arena* nr_arena;
 void* nr_alloc(size_t sz) { return calloc(1, sz); }
-struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value* elements; int count; int capacity; }* arr; struct { char** keys; struct Value* values; int count; int capacity; }* obj; } data; } Value;
-#define val_nil() ((Value){.type = VAL_NIL})
-#define val_int(v) ((Value){.type = VAL_INT, .data.i = (long long)(v)})
-#define val_bool(b) ((Value){.type = VAL_BOOL, .data.i = (long long)(b)})
-#define val_str_len(str, len) ((Value){.type = VAL_STR, .length = (len), .data.s = (char*)(str)})
+struct Value; typedef struct Value { ValueType type; int length; union { long long i; double f; char* s; void* func_ptr; struct { struct Value** elements; int count; int capacity; }* arr; struct { char** keys; struct Value** values; int count; int capacity; }* obj; } data; } Value;
+#define val_nil() ({ Value _v; _v.type = VAL_NIL; _v.data.i = 0; _v; })
+#define val_int(v) ({ Value _v; _v.type = VAL_INT; _v.data.i = (long long)(v); _v; })
+#define val_float(v) ({ Value _v; _v.type = VAL_FLOAT; _v.data.f = (double)(v); _v; })
+#define val_bool(b) ({ Value _v; _v.type = VAL_BOOL; _v.data.i = (long long)(b); _v; })
+#define val_error(v) ({ Value _v; _v.type = VAL_ERROR; _v.data.s = (char*)(v); _v; })
+#define val_str_len(str, len) ({ Value _v; _v.type = VAL_STR; _v.length = (len); _v.data.s = (char*)(str); _v; })
 #define val_str(str) val_str_len(str, (str) ? strlen(str) : 0)
-#define val_func(ptr) ((Value){.type = VAL_FUNC, .data.func_ptr = (void*)(ptr)})
+#define val_func(ptr) ({ Value _v; _v.type = VAL_FUNC; _v.data.func_ptr = (void*)(ptr); _v; })
 #define IS_TRUTHY(v) ((v).type == VAL_BOOL ? (v).data.i : ((v).type != VAL_NIL))
-Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value)*16); return v; }
-Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value)*16); return v; }
+Value val_obj() { Value v = {.type = VAL_OBJ}; v.data.obj = nr_alloc(sizeof(*v.data.obj)); v.data.obj->count = 0; v.data.obj->capacity = 16; v.data.obj->keys = nr_alloc(sizeof(char*)*16); v.data.obj->values = nr_alloc(sizeof(Value*)*16); return v; }
+Value val_arr() { Value v = {.type = VAL_ARR}; v.data.arr = nr_alloc(sizeof(*v.data.arr)); v.data.arr->count = 0; v.data.arr->capacity = 16; v.data.arr->elements = nr_alloc(sizeof(Value*)*16); return v; }
 char* nr_strdup(const char* s) { int l=strlen(s); char* d=nr_alloc(l+1); strcpy(d,s); return d; }
-void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count++] = val; }
-Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return obj.data.obj->values[i]; return val_nil(); }
+void set_field(Value obj, const char* key, Value val) { if(obj.type!=VAL_OBJ) return; for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) { *obj.data.obj->values[i] = val; return; } obj.data.obj->keys[obj.data.obj->count] = nr_strdup(key); obj.data.obj->values[obj.data.obj->count] = malloc(sizeof(Value)); *obj.data.obj->values[obj.data.obj->count++] = val; }
+Value get_field(Value obj, const char* key) { if(obj.type!=VAL_OBJ) return val_nil(); for(int i=0; i<obj.data.obj->count; i++) if(strcmp(obj.data.obj->keys[i], key)==0) return *obj.data.obj->values[i]; return val_nil(); }
 Value nr_rt_at(Value self, Value obj, Value idx, Value _v2, Value _v3, Value _v4) {
-  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) return obj.data.arr->elements[i]; }
+  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) return *obj.data.arr->elements[i]; }
   if (obj.type == VAL_OBJ && idx.type == VAL_STR) return get_field(obj, idx.data.s);
   return val_nil();
 }
 Value nr_rt_set_at(Value self, Value obj, Value idx, Value val, Value _v3, Value _v4) {
-  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) obj.data.arr->elements[i] = val; }
+  if (obj.type == VAL_ARR) { int i = (int)idx.data.i; if (i >= 0 && i < obj.data.arr->count) *obj.data.arr->elements[i] = val; }
   else if (obj.type == VAL_OBJ && idx.type == VAL_STR) set_field(obj, idx.data.s, val);
   return val_nil();
 }
@@ -50,7 +51,7 @@ Value nr_rt_print(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v
   printf("\n"); fflush(stdout); return val_nil();
 }
 Value nr_rt_len(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if (v.type == VAL_STR) return val_int(strlen(v.data.s)); if (v.type == VAL_ARR) return val_int(v.data.arr->count); return val_int(0); }
-Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_nil(); if(arr.data.arr->count >= arr.data.arr->capacity) { int new_cap = arr.data.arr->capacity * 2; Value* new_elements = malloc(sizeof(Value) * new_cap); memcpy(new_elements, arr.data.arr->elements, sizeof(Value) * arr.data.arr->count); arr.data.arr->elements = new_elements; arr.data.arr->capacity = new_cap; } arr.data.arr->elements[arr.data.arr->count++] = val; return val_nil(); }
+Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_nil(); if(arr.data.arr->count >= arr.data.arr->capacity) { int new_cap = arr.data.arr->capacity * 2; Value** new_elements = malloc(sizeof(Value*) * new_cap); memcpy(new_elements, arr.data.arr->elements, sizeof(Value*) * arr.data.arr->count); arr.data.arr->elements = new_elements; arr.data.arr->capacity = new_cap; } arr.data.arr->elements[arr.data.arr->count] = malloc(sizeof(Value)); *arr.data.arr->elements[arr.data.arr->count++] = val; return val_nil(); }
 Value nr_rt_typeof(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
   if (v.type == VAL_INT) return val_str("int"); if (v.type == VAL_FLOAT) return val_str("float"); if (v.type == VAL_STR) return val_str("string");
   if (v.type == VAL_BOOL) return val_str("bool"); if (v.type == VAL_OBJ) return val_str("object"); if (v.type == VAL_ARR) return val_str("array");
@@ -74,7 +75,7 @@ Value nr_rt_sqrt(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4
 Value nr_rt_max(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av>bv)?av:bv}; } return val_int((a.data.i>b.data.i)?a.data.i:b.data.i); }
 Value nr_rt_min(Value self, Value a, Value b, Value _v2, Value _v3, Value _v4) { if(a.type==VAL_FLOAT||b.type==VAL_FLOAT){ double av=(a.type==VAL_FLOAT)?a.data.f:(double)a.data.i; double bv=(b.type==VAL_FLOAT)?b.data.f:(double)b.data.i; return (Value){.type=VAL_FLOAT,.data.f=(av<bv)?av:bv}; } return val_int((a.data.i<b.data.i)?a.data.i:b.data.i); }
 Value nr_rt_abs(Value self, Value n, Value _v1, Value _v2, Value _v3, Value _v4) { if(n.type==VAL_FLOAT) return (Value){.type=VAL_FLOAT,.data.f=fabs(n.data.f)}; return val_int(llabs(n.data.i)); }
-Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], source.data.obj->values[i]); return target; }
+Value nr_rt_obj_assign(Value self, Value target, Value source, Value _v2, Value _v3, Value _v4) { if(target.type!=VAL_OBJ || source.type!=VAL_OBJ) return target; for(int i=0; i<source.data.obj->count; i++) set_field(target, source.data.obj->keys[i], *source.data.obj->values[i]); return target; }
 Value nr_rt_random(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) { return val_int(rand()); }
 Value nr_rt_to_int(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type==VAL_INT) return v; if(v.type==VAL_STR) return val_int(atoll(v.data.s)); return val_int(0); }
 Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) {
@@ -83,8 +84,8 @@ Value nr_rt_json_encode(Value self, Value v, Value _v1, Value _v2, Value _v3, Va
   if(v.type==VAL_BOOL) return val_str(v.data.i ? "true" : "false");
   if(v.type==VAL_NIL) return val_str("null");
   if(v.type==VAL_STR) { char* b=nr_alloc(strlen(v.data.s)+3); sprintf(b, "\"%s\"", v.data.s); return val_str(b); }
-  if(v.type==VAL_ARR) { char* b=nr_strdup("["); for(int i=0; i<v.data.arr->count; i++) { Value item=nr_rt_json_encode(val_nil(), v.data.arr->elements[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(n2, "%s%s%s", b, item.data.s, (i==v.data.arr->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s]", b); return val_str(f); }
-  if(v.type==VAL_OBJ) { char* b=nr_strdup("{"); for(int i=0; i<v.data.obj->count; i++) { Value vl=nr_rt_json_encode(val_nil(), v.data.obj->values[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(v.data.obj->keys[i])+strlen(vl.data.s)+6); sprintf(n2, "%s\"%s\":%s%s", b, v.data.obj->keys[i], vl.data.s, (i==v.data.obj->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s}", b); return val_str(f); }
+  if(v.type==VAL_ARR) { char* b=nr_strdup("["); for(int i=0; i<v.data.arr->count; i++) { Value item=nr_rt_json_encode(val_nil(), *v.data.arr->elements[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(item.data.s)+3); sprintf(n2, "%s%s%s", b, item.data.s, (i==v.data.arr->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s]", b); return val_str(f); }
+  if(v.type==VAL_OBJ) { char* b=nr_strdup("{"); for(int i=0; i<v.data.obj->count; i++) { Value vl=nr_rt_json_encode(val_nil(), *v.data.obj->values[i], val_nil(), val_nil(), val_nil(), val_nil()); char* n2=nr_alloc(strlen(b)+strlen(v.data.obj->keys[i])+strlen(vl.data.s)+6); sprintf(n2, "%s\"%s\":%s%s", b, v.data.obj->keys[i], vl.data.s, (i==v.data.obj->count-1)?"":","); b=n2; } char* f=nr_alloc(strlen(b)+2); sprintf(f, "%s}", b); return val_str(f); }
   return val_str("null");
 }
 Value nr_rt_json_parse_internal(char** p) {
@@ -149,7 +150,7 @@ Value nr_rt_parse_bool(Value self, Value v, Value _v1, Value _v2, Value _v3, Val
 const char* B64T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 Value nr_rt_to_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); char* res=nr_alloc(4*((l+2)/3)+1); int i=0,j=0; while(i<l){ uint32_t a=v.data.s[i++]; uint32_t b=i<l?v.data.s[i++]:0; uint32_t c=i<l?v.data.s[i++]:0; uint32_t t=(a<<16)|(b<<8)|c; res[j++]=B64T[(t>>18)&0x3F]; res[j++]=B64T[(t>>12)&0x3F]; res[j++]=i>l+1?'=':B64T[(t>>6)&0x3F]; res[j++]=i>l?'=':B64T[t&0x3F]; } res[j]=0; return val_str(res); }
 Value nr_rt_from_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); if(l%4!=0) return val_nil(); int ol=l/4*3; if(v.data.s[l-1]=='=') ol--; if(v.data.s[l-2]=='=') ol--; char* res=nr_alloc(ol+1); static char dt[256]; static int built=0; if(!built){ for(int i=0;i<64;i++) dt[(unsigned char)B64T[i]]=i; built=1; } int i=0,j=0; while(i<l){ uint32_t a=dt[(unsigned char)v.data.s[i++]]; uint32_t b=dt[(unsigned char)v.data.s[i++]]; uint32_t c=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t d=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t t=(a<<18)|(b<<12)|(c<<6)|d; if(j<ol) res[j++]=(t>>16)&0xFF; if(j<ol) res[j++]=(t>>8)&0xFF; if(j<ol) res[j++]=t&0xFF; } res[ol]=0; return val_str(res); }
-Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if(res.data.arr->elements[j].type==v.type && res.data.arr->elements[j].data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
+Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=*arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if((*res.data.arr->elements[j]).type==v.type && (*res.data.arr->elements[j]).data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
 Value nr_rt_keys(Value self, Value obj, Value _v1, Value _v2, Value _v3, Value _v4) { if(obj.type!=VAL_OBJ) return val_arr(); Value res=val_arr(); for(int i=0;i<obj.data.obj->count;i++) if(obj.data.obj->keys[i]) nr_rt_push(val_nil(), res, val_str(nr_strdup(obj.data.obj->keys[i])), val_nil(), val_nil(), val_nil()); return res; }
 
 Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Value _v4, Value _v5) {
@@ -189,7 +190,7 @@ Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Valu
     Value res_v=val_nil(); int matched=0;
     if(routes_v.type==VAL_ARR) {
       for(int ri=0;ri<routes_v.data.arr->count;ri++) {
-        Value route=routes_v.data.arr->elements[ri]; if(route.type!=VAL_OBJ) continue;
+        Value route=*routes_v.data.arr->elements[ri]; if(route.type!=VAL_OBJ) continue;
         Value rm=get_field(route,"method"),rp=get_field(route,"path"),rh=get_field(route,"handler");
         if(rm.type!=VAL_STR||rp.type!=VAL_STR||strcmp(rm.data.s,m)!=0) continue;
         int pm=0; if(strcmp(rp.data.s,p)==0) pm=1;
@@ -262,6 +263,105 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "array") == 0) { Value m = val_obj(); set_field(m, "push", val_func(nr_rt_push)); return m; }
   return val_obj();
 }
+Value nr_toInt(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toFloat(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toStr(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toBool(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_parseInt(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_parseFloat(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_parseBool(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toBase64(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_fromBase64(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toHex(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toBytes(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_fromBytes(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toList(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toSet(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toMap(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_entries(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_stringify(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_parse(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_now(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_sleep(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toUnix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_fromDate(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+Value nr_toString(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);
+
+Value nr_v_toInt;
+Value nr_v_any;
+Value nr_v_base;
+Value nr_v___builtin_conv_to_int;
+Value nr_v_toFloat;
+Value nr_v___builtin_conv_to_float;
+Value nr_v_toStr;
+Value nr_v___builtin_conv_to_str;
+Value nr_v_toBool;
+Value nr_v___builtin_conv_to_bool;
+Value nr_v_conv;
+Value nr_v_parseInt;
+Value nr_v_str;
+Value nr_v___builtin_parse_int;
+Value nr_v_parseFloat;
+Value nr_v___builtin_parse_float;
+Value nr_v_parseBool;
+Value nr_v___builtin_parse_bool;
+Value nr_v_parse;
+Value nr_v_toBase64;
+Value nr_v_data;
+Value nr_v___builtin_encoding_to_base64;
+Value nr_v_fromBase64;
+Value nr_v___builtin_encoding_from_base64;
+Value nr_v_toHex;
+Value nr_v___builtin_encoding_to_hex;
+Value nr_v_toBytes;
+Value nr_v_fromBytes;
+Value nr_v_bytes;
+Value nr_v_encoding;
+Value nr_v_toList;
+Value nr_v_iter;
+Value nr_v_res;
+Value nr_v_item;
+Value nr_v_toSet;
+Value nr_v_list;
+Value nr_v_seen;
+Value nr_v_toMap;
+Value nr_v_list_of_pairs;
+Value nr_v_pair;
+Value nr_v_entries;
+Value nr_v_map;
+Value nr_v_keys;
+Value nr_v_key;
+Value nr_v_collection;
+Value nr_v_stringify;
+Value nr_v_obj;
+Value nr_v___builtin_json_stringify;
+Value nr_v_json_str;
+Value nr_v___builtin_json_parse;
+Value nr_v_json;
+Value nr_v_now;
+Value nr_v___builtin_time_now;
+Value nr_v_sleep;
+Value nr_v_ms;
+Value nr_v___builtin_delay;
+Value nr_v_toUnix;
+Value nr_v_time_obj;
+Value nr_v___builtin_time_to_unix;
+Value nr_v_fromDate;
+Value nr_v_year;
+Value nr_v_month;
+Value nr_v_day;
+Value nr_v_toString;
+Value nr_v_layout;
+Value nr_v_time;
+Value nr_v_val;
+Value nr_v_num;
+Value nr_v_println;
+Value nr_v_f;
+Value nr_v_b64;
+Value nr_v_jstr;
+Value nr_v_unique;
+Value nr_v_len;
+Value nr_v_d;
 Value nr_v_start;
 Value nr_v_end;
 Value nr_v_sum;
@@ -274,28 +374,291 @@ Value nr_v_result;
 Value nr_v_millis;
 long long* nr_v_arr_unboxed; int nr_v_arr_count; Value nr_v_arr;
 Value nr_v_count;
-Value nr_v_toInt;
-Value nr_v_json;
 Value nr_v_file;
 Value nr_v_http;
-Value nr_v_conv;
-Value nr_v_parse;
-Value nr_v_encoding;
-Value nr_v_collection;
-Value nr_v_time;
-Value nr_v_val;
-Value nr_v_num;
-Value nr_v_f;
-Value nr_v_b64;
-Value nr_v_obj;
-Value nr_v_jstr;
-Value nr_v_list;
-Value nr_v_unique;
-Value nr_v_d;
+Value nr_toInt(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_any;
+  nr_v_any = _v0; if(nr_v_any.type == VAL_NIL) { }
+  Value nr_v_base;
+  nr_v_base = _v1; if(nr_v_base.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_conv_to_int; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_any, nr_v_base, val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_toFloat(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_any;
+  nr_v_any = _v0; if(nr_v_any.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_conv_to_float; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_any, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_toStr(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_any;
+  nr_v_any = _v0; if(nr_v_any.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_conv_to_str; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_any, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_toBool(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_any;
+  nr_v_any = _v0; if(nr_v_any.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_conv_to_bool; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_any, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_parseInt(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_str;
+  nr_v_str = _v0; if(nr_v_str.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_parse_int; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_str, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_parseFloat(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_str;
+  nr_v_str = _v0; if(nr_v_str.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_parse_float; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_str, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_parseBool(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_str;
+  nr_v_str = _v0; if(nr_v_str.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_parse_bool; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_str, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_toBase64(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_data;
+  nr_v_data = _v0; if(nr_v_data.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_encoding_to_base64; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_data, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_fromBase64(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_str;
+  nr_v_str = _v0; if(nr_v_str.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_encoding_from_base64; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_str, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_toHex(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_data;
+  nr_v_data = _v0; if(nr_v_data.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_encoding_to_hex; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_data, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
+Value nr_toBytes(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_str;
+  nr_v_str = _v0; if(nr_v_str.type == VAL_NIL) { }
+  return nr_v_str;
+  return val_nil();
+}
+Value nr_fromBytes(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_bytes;
+  nr_v_bytes = _v0; if(nr_v_bytes.type == VAL_NIL) { }
+  return nr_v_bytes;
+  return val_nil();
+}
+Value nr_toList(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_iter;
+  nr_v_iter = _v0; if(nr_v_iter.type == VAL_NIL) { }
+  nr_v_res = ({ Value _a = val_arr(); _a; });
+  { Value _iter = nr_v_iter; if (_iter.type == VAL_ARR) {
+    for (int _i = 0; _i < _iter.data.arr->count; _i++) {
+      nr_v_item = *_iter.data.arr->elements[_i];
+({ nr_rt_push(val_nil(), nr_v_res, nr_v_item, val_nil(), val_nil(), val_nil()); val_nil(); });
+    }
+  } }
+;
+  return nr_v_res;
+  return val_nil();
+}
+Value nr_toSet(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_list;
+  nr_v_list = _v0; if(nr_v_list.type == VAL_NIL) { }
+  nr_v_res = ({ Value _a = val_arr(); _a; });
+  nr_v_seen = ({ Value _o = val_obj(); _o; });
+  { Value _iter = nr_v_list; if (_iter.type == VAL_ARR) {
+    for (int _i = 0; _i < _iter.data.arr->count; _i++) {
+      nr_v_item = *_iter.data.arr->elements[_i];
+  if ((!(nr_rt_at(val_nil(), nr_v_seen, nr_v_item, val_nil(), val_nil(), val_nil())).data.i)) {
+({ nr_rt_push(val_nil(), nr_v_res, nr_v_item, val_nil(), val_nil(), val_nil()); val_nil(); });
+  nr_rt_set_at(val_nil(), nr_v_seen, nr_v_item, val_bool(true), val_nil(), val_nil());
+  };
+    }
+  } }
+;
+  return nr_v_res;
+  return val_nil();
+}
+Value nr_toMap(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_list_of_pairs;
+  nr_v_list_of_pairs = _v0; if(nr_v_list_of_pairs.type == VAL_NIL) { }
+  nr_v_res = ({ Value _o = val_obj(); _o; });
+  { Value _iter = nr_v_list_of_pairs; if (_iter.type == VAL_ARR) {
+    for (int _i = 0; _i < _iter.data.arr->count; _i++) {
+      nr_v_pair = *_iter.data.arr->elements[_i];
+  nr_rt_set_at(val_nil(), nr_v_res, nr_rt_at(val_nil(), nr_v_pair, val_int(0), val_nil(), val_nil(), val_nil()), nr_rt_at(val_nil(), nr_v_pair, val_int(1), val_nil(), val_nil(), val_nil()), val_nil(), val_nil());
+    }
+  } }
+;
+  return nr_v_res;
+  return val_nil();
+}
+Value nr_entries(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_map;
+  nr_v_map = _v0; if(nr_v_map.type == VAL_NIL) { }
+  nr_v_res = ({ Value _a = val_arr(); _a; });
+  nr_v_keys = nr_rt_obj_keys(val_nil(), nr_v_map, val_nil(), val_nil(), val_nil(), val_nil());
+  { Value _iter = nr_v_keys; if (_iter.type == VAL_ARR) {
+    for (int _i = 0; _i < _iter.data.arr->count; _i++) {
+      nr_v_key = *_iter.data.arr->elements[_i];
+({ nr_rt_push(val_nil(), nr_v_res, ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, nr_v_key, val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, nr_rt_at(val_nil(), nr_v_map, nr_v_key, val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil()); _a; }), val_nil(), val_nil(), val_nil()); val_nil(); });
+    }
+  } }
+;
+  return nr_v_res;
+  return val_nil();
+}
+Value nr_stringify(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_obj;
+  nr_v_obj = _v0; if(nr_v_obj.type == VAL_NIL) { }
+  return nr_rt_json_encode(val_nil(), nr_v_obj, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_parse(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_json_str;
+  nr_v_json_str = _v0; if(nr_v_json_str.type == VAL_NIL) { }
+  return nr_rt_json_parse(val_nil(), nr_v_json_str, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_now(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  return nr_rt_now(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_sleep(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_ms;
+  nr_v_ms = _v0; if(nr_v_ms.type == VAL_NIL) { }
+  return nr_rt_delay(val_nil(), nr_v_ms, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_toUnix(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_time_obj;
+  nr_v_time_obj = _v0; if(nr_v_time_obj.type == VAL_NIL) { }
+  return nr_rt_time_to_unix(val_nil(), nr_v_time_obj, val_nil(), val_nil(), val_nil(), val_nil());
+  return val_nil();
+}
+Value nr_fromDate(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_year;
+  nr_v_year = _v0; if(nr_v_year.type == VAL_NIL) { }
+  Value nr_v_month;
+  nr_v_month = _v1; if(nr_v_month.type == VAL_NIL) { }
+  Value nr_v_day;
+  nr_v_day = _v2; if(nr_v_day.type == VAL_NIL) { }
+  return ({ Value _o = val_obj(); set_field(_o, "year", nr_v_year); set_field(_o, "month", nr_v_month); set_field(_o, "day", nr_v_day); _o; });
+  return val_nil();
+}
+Value nr_toString(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4) {
+  long long nr_v_i=0, nr_v_j=0;
+  Value nr_v_time_obj;
+  nr_v_time_obj = _v0; if(nr_v_time_obj.type == VAL_NIL) { }
+  Value nr_v_layout;
+  nr_v_layout = _v1; if(nr_v_layout.type == VAL_NIL) { }
+  return ({ Value _f = nr_v___builtin_conv_to_str; _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(val_nil(), nr_v_time_obj, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  return val_nil();
+}
 int main(int argc, char** argv) {
   long long nr_v_i=0, nr_v_j=0;
   size_t heap_size = 1024 * 1024 * 1024; nr_arena = malloc(sizeof(Arena)); nr_arena->heap_start = malloc(heap_size); nr_arena->current = nr_arena->heap_start;
   nr_argc = argc; nr_argv = argv;
+  nr_v_toInt = val_nil();
+  nr_v_any = val_nil();
+  nr_v_base = val_nil();
+  nr_v___builtin_conv_to_int = val_nil();
+  nr_v_toFloat = val_nil();
+  nr_v___builtin_conv_to_float = val_nil();
+  nr_v_toStr = val_nil();
+  nr_v___builtin_conv_to_str = val_nil();
+  nr_v_toBool = val_nil();
+  nr_v___builtin_conv_to_bool = val_nil();
+  nr_v_conv = val_nil();
+  nr_v_parseInt = val_nil();
+  nr_v_str = val_nil();
+  nr_v___builtin_parse_int = val_nil();
+  nr_v_parseFloat = val_nil();
+  nr_v___builtin_parse_float = val_nil();
+  nr_v_parseBool = val_nil();
+  nr_v___builtin_parse_bool = val_nil();
+  nr_v_parse = val_nil();
+  nr_v_toBase64 = val_nil();
+  nr_v_data = val_nil();
+  nr_v___builtin_encoding_to_base64 = val_nil();
+  nr_v_fromBase64 = val_nil();
+  nr_v___builtin_encoding_from_base64 = val_nil();
+  nr_v_toHex = val_nil();
+  nr_v___builtin_encoding_to_hex = val_nil();
+  nr_v_toBytes = val_nil();
+  nr_v_fromBytes = val_nil();
+  nr_v_bytes = val_nil();
+  nr_v_encoding = val_nil();
+  nr_v_toList = val_nil();
+  nr_v_iter = val_nil();
+  nr_v_res = val_nil();
+  nr_v_item = val_nil();
+  nr_v_toSet = val_nil();
+  nr_v_list = val_nil();
+  nr_v_seen = val_nil();
+  nr_v_toMap = val_nil();
+  nr_v_list_of_pairs = val_nil();
+  nr_v_pair = val_nil();
+  nr_v_entries = val_nil();
+  nr_v_map = val_nil();
+  nr_v_keys = val_nil();
+  nr_v_key = val_nil();
+  nr_v_collection = val_nil();
+  nr_v_stringify = val_nil();
+  nr_v_obj = val_nil();
+  nr_v___builtin_json_stringify = val_nil();
+  nr_v_json_str = val_nil();
+  nr_v___builtin_json_parse = val_nil();
+  nr_v_json = val_nil();
+  nr_v_now = val_nil();
+  nr_v___builtin_time_now = val_nil();
+  nr_v_sleep = val_nil();
+  nr_v_ms = val_nil();
+  nr_v___builtin_delay = val_nil();
+  nr_v_toUnix = val_nil();
+  nr_v_time_obj = val_nil();
+  nr_v___builtin_time_to_unix = val_nil();
+  nr_v_fromDate = val_nil();
+  nr_v_year = val_nil();
+  nr_v_month = val_nil();
+  nr_v_day = val_nil();
+  nr_v_toString = val_nil();
+  nr_v_layout = val_nil();
+  nr_v_time = val_nil();
+  nr_v_val = val_nil();
+  nr_v_num = val_nil();
+  nr_v_println = val_nil();
+  nr_v_f = val_nil();
+  nr_v_b64 = val_nil();
+  nr_v_jstr = val_nil();
+  nr_v_unique = val_nil();
+  nr_v_len = val_nil();
+  nr_v_d = val_nil();
   nr_v_start = val_nil();
   nr_v_end = val_nil();
   nr_v_sum = val_nil();
@@ -308,57 +671,93 @@ int main(int argc, char** argv) {
   nr_v_millis = val_nil();
   nr_v_arr_unboxed = malloc(sizeof(long long) * 100000); nr_v_arr_count = 0; nr_v_arr = val_arr();
   nr_v_count = val_nil();
-  nr_v_toInt = val_nil();
-  nr_v_json = val_nil();
   nr_v_file = val_nil();
   nr_v_http = val_nil();
-  nr_v_conv = val_nil();
-  nr_v_parse = val_nil();
-  nr_v_encoding = val_nil();
-  nr_v_collection = val_nil();
-  nr_v_time = val_nil();
-  nr_v_val = val_nil();
-  nr_v_num = val_nil();
-  nr_v_f = val_nil();
-  nr_v_b64 = val_nil();
-  nr_v_obj = val_nil();
-  nr_v_jstr = val_nil();
-  nr_v_list = val_nil();
-  nr_v_unique = val_nil();
-  nr_v_d = val_nil();
   nr_v_toInt = val_func(nr_rt_to_int);
   nr_v_json = nr_rt_load_module("json");
   nr_v_file = nr_rt_load_module("file");
   nr_v_http = nr_rt_load_module("http");
-  nr_v_conv = nr_rt_load_module("conv");
+  nr_v_toInt = val_func(nr_toInt);
+  nr_v_toFloat = val_func(nr_toFloat);
+  nr_v_toStr = val_func(nr_toStr);
+  nr_v_toBool = val_func(nr_toBool);
+  nr_v_parseInt = val_func(nr_parseInt);
+  nr_v_parseFloat = val_func(nr_parseFloat);
+  nr_v_parseBool = val_func(nr_parseBool);
+  nr_v_toBase64 = val_func(nr_toBase64);
+  nr_v_fromBase64 = val_func(nr_fromBase64);
+  nr_v_toHex = val_func(nr_toHex);
+  nr_v_toBytes = val_func(nr_toBytes);
+  nr_v_fromBytes = val_func(nr_fromBytes);
+  nr_v_toList = val_func(nr_toList);
+  nr_v_toSet = val_func(nr_toSet);
+  nr_v_toMap = val_func(nr_toMap);
+  nr_v_entries = val_func(nr_entries);
+  nr_v_stringify = val_func(nr_stringify);
+  nr_v_parse = val_func(nr_parse);
+  nr_v_now = val_func(nr_now);
+  nr_v_sleep = val_func(nr_sleep);
+  nr_v_toUnix = val_func(nr_toUnix);
+  nr_v_fromDate = val_func(nr_fromDate);
+  nr_v_toString = val_func(nr_toString);
+  { Value _m = val_obj();
+    set_field(_m, "toInt", val_func(nr_toInt));
+    set_field(_m, "toFloat", val_func(nr_toFloat));
+    set_field(_m, "toStr", val_func(nr_toStr));
+    set_field(_m, "toBool", val_func(nr_toBool));
+    nr_v_conv = _m; }
 ;
-  nr_v_parse = nr_rt_load_module("parse");
+  { Value _m = val_obj();
+    set_field(_m, "parseInt", val_func(nr_parseInt));
+    set_field(_m, "parseFloat", val_func(nr_parseFloat));
+    set_field(_m, "parseBool", val_func(nr_parseBool));
+    nr_v_parse = _m; }
 ;
-  nr_v_encoding = nr_rt_load_module("encoding");
+  { Value _m = val_obj();
+    set_field(_m, "toBase64", val_func(nr_toBase64));
+    set_field(_m, "fromBase64", val_func(nr_fromBase64));
+    set_field(_m, "toHex", val_func(nr_toHex));
+    set_field(_m, "toBytes", val_func(nr_toBytes));
+    set_field(_m, "fromBytes", val_func(nr_fromBytes));
+    nr_v_encoding = _m; }
 ;
-  nr_v_collection = nr_rt_load_module("collection");
+  { Value _m = val_obj();
+    set_field(_m, "toList", val_func(nr_toList));
+    set_field(_m, "toSet", val_func(nr_toSet));
+    set_field(_m, "toMap", val_func(nr_toMap));
+    set_field(_m, "entries", val_func(nr_entries));
+    nr_v_collection = _m; }
 ;
-  nr_v_json = nr_rt_load_module("json");
+  { Value _m = val_obj();
+    set_field(_m, "stringify", val_func(nr_stringify));
+    set_field(_m, "parse", val_func(nr_parse));
+    nr_v_json = _m; }
 ;
-  nr_v_time = nr_rt_load_module("time");
+  { Value _m = val_obj();
+    set_field(_m, "now", val_func(nr_now));
+    set_field(_m, "sleep", val_func(nr_sleep));
+    set_field(_m, "toUnix", val_func(nr_toUnix));
+    set_field(_m, "fromDate", val_func(nr_fromDate));
+    set_field(_m, "toString", val_func(nr_toString));
+    nr_v_time = _m; }
 ;
 val_nil();
   nr_v_val = val_str("123");
-  nr_v_num = ({ Value _f = get_field(nr_v_conv, "toInt"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_conv, nr_v_val, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  nr_v_num = ({ Value _f = get_field(nr_v_conv, "toInt"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_conv, nr_v_val, val_nil(), val_nil(), val_nil(), val_nil()) : nr_toInt(nr_v_conv, nr_v_val, val_nil(), val_nil(), val_nil(), val_nil()); });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("conv.toInt: "), nr_rt_to_string(val_nil(), nr_v_num, val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
-  nr_v_f = ({ Value _f = get_field(nr_v_parse, "parseFloat"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_parse, val_str("3.14"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  nr_v_f = ({ Value _f = get_field(nr_v_parse, "parseFloat"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_parse, val_str("3.14"), val_nil(), val_nil(), val_nil(), val_nil()) : nr_parseFloat(nr_v_parse, val_str("3.14"), val_nil(), val_nil(), val_nil(), val_nil()); });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("parse.parseFloat: "), nr_rt_to_string(val_nil(), nr_v_f, val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
-  nr_v_b64 = ({ Value _f = get_field(nr_v_encoding, "toBase64"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_encoding, val_str("hello"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  nr_v_b64 = ({ Value _f = get_field(nr_v_encoding, "toBase64"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_encoding, val_str("hello"), val_nil(), val_nil(), val_nil(), val_nil()) : nr_toBase64(nr_v_encoding, val_str("hello"), val_nil(), val_nil(), val_nil(), val_nil()); });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Base64: "), nr_v_b64), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
-({ nr_rt_print(val_nil(), nr_rt_add(val_str("Decoded: "), ({ Value _f = get_field(nr_v_encoding, "fromBase64"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_encoding, nr_v_b64, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); })), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+({ nr_rt_print(val_nil(), nr_rt_add(val_str("Decoded: "), ({ Value _f = get_field(nr_v_encoding, "fromBase64"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_encoding, nr_v_b64, val_nil(), val_nil(), val_nil(), val_nil()) : nr_fromBase64(nr_v_encoding, nr_v_b64, val_nil(), val_nil(), val_nil(), val_nil()); })), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
   nr_v_obj = ({ Value _o = val_obj(); set_field(_o, "name", val_str("Nira")); set_field(_o, "version", val_int(1)); _o; });
-  nr_v_jstr = ({ Value _f = get_field(nr_v_json, "stringify"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_json, nr_v_obj, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  nr_v_jstr = ({ Value _f = get_field(nr_v_json, "stringify"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_json, nr_v_obj, val_nil(), val_nil(), val_nil(), val_nil()) : nr_stringify(nr_v_json, nr_v_obj, val_nil(), val_nil(), val_nil(), val_nil()); });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("JSON: "), nr_v_jstr), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
   nr_v_list = ({ Value _a = val_arr(); nr_rt_push(val_nil(), _a, val_int(1), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(1), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(2), val_nil(), val_nil(), val_nil()); nr_rt_push(val_nil(), _a, val_int(3), val_nil(), val_nil(), val_nil()); _a; });
-  nr_v_unique = ({ Value _f = get_field(nr_v_collection, "toSet"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_collection, nr_v_list, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+  nr_v_unique = ({ Value _f = get_field(nr_v_collection, "toSet"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_collection, nr_v_list, val_nil(), val_nil(), val_nil(), val_nil()) : nr_toSet(nr_v_collection, nr_v_list, val_nil(), val_nil(), val_nil(), val_nil()); });
 ({ nr_rt_print(val_nil(), nr_rt_add(val_str("Unique items: "), nr_rt_to_string(val_nil(), nr_rt_len(val_nil(), nr_v_unique, val_nil(), val_nil(), val_nil(), val_nil()), val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
-  nr_v_d = ({ Value _f = get_field(nr_v_time, "fromDate"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_time, val_int(2024), val_int(5), val_int(7), val_nil(), val_nil()) : val_nil(); });
-({ nr_rt_print(val_nil(), nr_rt_add(val_str("Unix time: "), nr_rt_to_string(val_nil(), ({ Value _f = get_field(nr_v_time, "toUnix"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_time, nr_v_d, val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); }), val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
+  nr_v_d = ({ Value _f = get_field(nr_v_time, "fromDate"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_time, val_int(2024), val_int(5), val_int(7), val_nil(), val_nil()) : nr_fromDate(nr_v_time, val_int(2024), val_int(5), val_int(7), val_nil(), val_nil()); });
+({ nr_rt_print(val_nil(), nr_rt_add(val_str("Unix time: "), nr_rt_to_string(val_nil(), ({ Value _f = get_field(nr_v_time, "toUnix"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_time, nr_v_d, val_nil(), val_nil(), val_nil(), val_nil()) : nr_toUnix(nr_v_time, nr_v_d, val_nil(), val_nil(), val_nil(), val_nil()); }), val_nil(), val_nil(), val_nil(), val_nil())), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
 ({ nr_rt_print(val_nil(), val_str("✨ All library tests passed!"), val_nil(), val_nil(), val_nil(), val_nil()); printf("\n"); val_nil(); });
   return 0; 
 }
