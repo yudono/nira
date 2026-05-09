@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <dirent.h>
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -153,6 +154,65 @@ void handle_install(int argc, char **argv) {
   printf("✅ Installed %s to %s\n", pkg, base_path);
 }
 
+void handle_test(int argc, char **argv) {
+  (void)argc; (void)argv;
+  DIR *d = opendir("tests");
+  if (!d) {
+    printf("Error: Could not open tests/ directory\n");
+    return;
+  }
+
+  struct dirent *dir;
+  int passed = 0;
+  int total = 0;
+  char *test_files[256];
+
+  while ((dir = readdir(d)) != NULL) {
+    if (strstr(dir->d_name, ".nr") && !strstr(dir->d_name, "stress_all.nr")) {
+      test_files[total++] = strdup(dir->d_name);
+    }
+  }
+  closedir(d);
+
+  // Sort files for consistent output
+  for (int i = 0; i < total - 1; i++) {
+    for (int j = i + 1; j < total; j++) {
+      if (strcmp(test_files[i], test_files[j]) > 0) {
+        char *temp = test_files[i];
+        test_files[i] = test_files[j];
+        test_files[j] = temp;
+      }
+    }
+  }
+
+  printf("\n🚀 Running Nira Test Suite...\n");
+  printf("========================================\n");
+
+  for (int i = 0; i < total; i++) {
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "./nira run tests/%s > /dev/null 2>&1", test_files[i]);
+    
+    printf("[%02d/%02d] Testing %-30s ", i + 1, total, test_files[i]);
+    fflush(stdout);
+
+    int status = system(cmd);
+    if (status == 0) {
+      printf("\033[1;32mPASSED\033[0m\n");
+      passed++;
+    } else {
+      printf("\033[1;31mFAILED\033[0m\n");
+    }
+    free(test_files[i]);
+  }
+
+  printf("========================================\n");
+  if (passed == total) {
+    printf("✨ \033[1;32mALL TESTS PASSED\033[0m (%d/%d)\n\n", passed, total);
+  } else {
+    printf("❌ \033[1;31mSOME TESTS FAILED\033[0m (%d/%d passed)\n\n", passed, total);
+  }
+}
+
 void print_help() {
   printf("Nira Programming Language CLI\n\n");
   printf("Usage:\n");
@@ -169,7 +229,7 @@ void handle_signal(int sig) {
   if (g_child_pid > 0) {
     kill(g_child_pid, SIGKILL);
   }
-  exit(0);
+  exit(1);
 }
 
 int main(int argc, char *argv[]) {
@@ -197,10 +257,7 @@ int main(int argc, char *argv[]) {
     handle_install(argc, argv);
     return 0;
   } else if (strcmp(cmd, "test") == 0) {
-    printf("Running all tests...\n");
-    // Simple hack: use system to find and run all .nr in tests/
-    system("mkdir -p .temp && for f in tests/*.nr; do echo \"Testing $f...\"; "
-           "./nira run $f; done");
+    handle_test(argc, argv);
     return 0;
   } else if (strcmp(cmd, "run") == 0) {
     if (argc < 3) {
@@ -380,7 +437,7 @@ void dump_ast(AstNode *node, int indent) {
     printf("VarRef: %s\n", node->data.var_ref.name);
     break;
   case AST_LITERAL_INT:
-    printf("LiteralInt: %d\n", node->data.int_val);
+    printf("LiteralInt: %lld\n", node->data.int_val);
     break;
   case AST_LITERAL_STR:
     printf("LiteralStr: %s\n", node->data.str_val);

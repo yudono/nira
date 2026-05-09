@@ -24,8 +24,12 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+#include <sqlite3.h>
 
 extern char nira_std_lib_path[1024];
+
+extern int g_argc;
+extern char **g_argv;
 
 static char *nr_read_file_internal(const char *path) {
   FILE *file = fopen(path, "rb");
@@ -41,6 +45,7 @@ static char *nr_read_file_internal(const char *path) {
   return buf;
 }
 
+static Value val_to_str(Value v);
 static char *nr_json_encode(Value v) {
   if (v.type == VAL_INT) {
     char b[64];
@@ -179,6 +184,7 @@ typedef struct ResolverScope {
   struct ResolverScope *parent;
   char *vars[256];
   int count;
+  int max_count;
 } ResolverScope;
 
 static void nr_resolve_node(AstNode *node, ResolverScope *scope) {
@@ -189,33 +195,29 @@ static void nr_resolve_node(AstNode *node, ResolverScope *scope) {
     for (int i = 0; i < node->data.program.count; i++)
       nr_resolve_node(node->data.program.statements[i], scope);
     break;
-  case AST_FUNC_DECL:
-  do_func_decl: {
-    // Resolve defaults in the outer scope
+  case AST_FUNC_DECL: {
     if (node->data.func_decl.param_defaults) {
-        for (int i = 0; i < node->data.func_decl.param_count; i++) {
-            if (node->data.func_decl.param_defaults[i]) {
-                nr_resolve_node(node->data.func_decl.param_defaults[i], scope);
-            }
+      for (int i = 0; i < node->data.func_decl.param_count; i++) {
+        if (node->data.func_decl.param_defaults[i]) {
+          nr_resolve_node(node->data.func_decl.param_defaults[i], scope);
         }
+      }
     }
-    ResolverScope inner = {.parent = scope, .count = 0};
+    ResolverScope inner = {.parent = scope, .count = 0, .max_count = 0};
     for (int i = 0; i < node->data.func_decl.param_count; i++) {
       inner.vars[inner.count++] = node->data.func_decl.params[i];
     }
+    if (inner.count > inner.max_count) inner.max_count = inner.count;
     nr_resolve_node(node->data.func_decl.body, &inner);
-    node->data.func_decl.local_count = inner.count;
+    node->data.func_decl.local_count = inner.max_count;
     break;
   }
-  case AST_VAR_REF:
-  do_var_ref: {
+  case AST_VAR_REF: {
     node->data.var_ref.slot = -1;
     ResolverScope *s = scope;
     while (s) {
       for (int i = 0; i < s->count; i++) {
         if (strcmp(node->data.var_ref.name, s->vars[i]) == 0) {
-          // For now, only resolve if it's in the CURRENT scope (local)
-          // This is a simplification for performance
           if (s == scope)
             node->data.var_ref.slot = i;
           break;
@@ -227,21 +229,35 @@ static void nr_resolve_node(AstNode *node, ResolverScope *scope) {
     }
     break;
   }
-  case AST_ASSIGN:
-  do_assign: {
+  case AST_ASSIGN: {
     node->data.assign.slot = -1;
     int found = -1;
-    for (int i = 0; i < scope->count; i++) {
-      if (strcmp(node->data.assign.target, scope->vars[i]) == 0) {
-        found = i;
+    
+    // Check all scopes to see if it already exists
+    ResolverScope *s = scope;
+    int is_local = 1;
+    while (s) {
+      for (int i = 0; i < s->count; i++) {
+        if (strcmp(node->data.assign.target, s->vars[i]) == 0) {
+          found = i;
+          break;
+        }
+      }
+      if (found != -1) {
+        if (is_local) node->data.assign.slot = found;
         break;
       }
+      s = s->parent;
+      is_local = 0;
     }
+    
+    // If not found anywhere, define it locally
     if (found == -1 && scope->count < 256) {
-      found = scope->count;
+      node->data.assign.slot = scope->count;
       scope->vars[scope->count++] = node->data.assign.target;
+      if (scope->count > scope->max_count) scope->max_count = scope->count;
     }
-    node->data.assign.slot = found;
+    
     nr_resolve_node(node->data.assign.value, scope);
     break;
   }
@@ -291,9 +307,13 @@ static void nr_resolve_node(AstNode *node, ResolverScope *scope) {
   case AST_FOR: {
     int old_count = scope->count;
     if (scope->count < 256) {
+      node->data.for_stmt.slot = scope->count;
       scope->vars[scope->count++] = node->data.for_stmt.alias
-                                        ? node->data.for_stmt.alias
-                                        : node->data.for_stmt.var;
+                                         ? node->data.for_stmt.alias
+                                         : node->data.for_stmt.var;
+      if (scope->count > scope->max_count) scope->max_count = scope->count;
+    } else {
+      node->data.for_stmt.slot = -1;
     }
     nr_resolve_node(node->data.for_stmt.iterable, scope);
     nr_resolve_node(node->data.for_stmt.body, scope);
@@ -459,8 +479,7 @@ static Environment *env_pool[ENV_POOL_SIZE];
 static int env_pool_count = 0;
 
 Environment *env_new(Environment *parent, int slot_count) {
-  Environment *env = env_pool_count > 0 ? env_pool[--env_pool_count]
-                                        : nr_malloc(sizeof(Environment));
+  Environment *env = nr_malloc(sizeof(Environment));
   env->parent = parent;
   env->slot_count = slot_count;
   env->count = 0;
@@ -480,12 +499,8 @@ Environment *env_new(Environment *parent, int slot_count) {
 }
 
 void env_free(Environment *env) {
-  if (env->slot_count > 0) {
-    value_stack_ptr -= env->slot_count;
-  }
-  if (env_pool_count < ENV_POOL_SIZE) {
-    env_pool[env_pool_count++] = env;
-  }
+  // Do nothing for now to prevent closure corruption
+  // The arena will clean up everything at the end of the request/program
 }
 
 static void env_resize(Environment *env) {
@@ -564,17 +579,24 @@ Value env_get_by_hash(Environment *env, char *name, unsigned int h) {
   if (!name)
     return val_nil();
   Environment *curr = env;
+  int depth = 0;
   while (curr) {
+    if (depth > 100) {
+      fprintf(stderr, "ERROR: Parent environment loop detected for '%s'\n", name);
+      return val_nil();
+    }
     if (curr->capacity > 0) {
       unsigned int idx = h % curr->capacity;
       Variable *v = curr->table[idx];
       while (v) {
-        if (v->name && strcmp(v->name, name) == 0)
+        if (v->name && strcmp(v->name, name) == 0) {
           return v->value;
+        }
         v = v->next;
       }
     }
     curr = curr->parent;
+    depth++;
   }
   return val_nil();
 }
@@ -644,20 +666,24 @@ Value get_field(Value obj, const char *key) {
 
 static void report_runtime_error(AstNode *node, Environment *env,
                                  const char *name, const char *msg) {
-  fprintf(stderr, "\n\033[1;31m[%s ERROR]\033[0m %s\n", name, msg);
-  fprintf(stderr, "\033[1;34m-->\033[0m %s:%d:%d\n",
-          env->filename ? env->filename : "source.nr", node->line,
-          node->column);
-
   const char *source = NULL;
+  const char *filename = "source.nr";
   Environment *curr = env;
   while (curr) {
-    if (curr->source) {
+    if (curr->filename && strcmp(filename, "source.nr") == 0) {
+      filename = curr->filename;
+    }
+    if (curr->source && !source) {
       source = curr->source;
+    }
+    if (strcmp(filename, "source.nr") != 0 && source) {
       break;
     }
     curr = curr->parent;
   }
+
+  fprintf(stderr, "\n\033[1;31m[%s ERROR]\033[0m %s\n", name, msg);
+  fprintf(stderr, "\033[1;34m-->\033[0m %s:%d:%d\n", filename, node->line, node->column);
 
   if (source) {
     int line = 1;
@@ -763,7 +789,7 @@ static char *read_file_internal(const char *path) {
   return buffer;
 }
 
-char *val_to_json_internal(Value v) {
+static char *val_to_json_internal(Value v) {
   if (v.type == VAL_INT) {
     char *b = nr_malloc(32);
     sprintf(b, "%lld", v.data.i);
@@ -866,11 +892,29 @@ static int is_safe_path(const char *path) {
   return 1;
 }
 
+void print_value(Value v) {
+  if (v.type == VAL_INT)
+    printf("%lld", v.data.i);
+  else if (v.type == VAL_FLOAT)
+    printf("%g", v.data.f);
+  else if (v.type == VAL_BOOL)
+    printf("%s", v.data.i ? "true" : "false");
+  else if (v.type == VAL_STR)
+    printf("%s", v.data.s);
+  else if (v.type == VAL_OBJ)
+    printf("[Object]");
+  else if (v.type == VAL_ARR)
+    printf("[Array]");
+  else if (v.type == VAL_NIL)
+    printf("nil");
+}
+
 // --- Evaluator ---
 
 static Value eval_binary(AstNode *node, Environment *env) {
   Value left;
   AstNode *l_node = node->data.binary.left;
+  // printf("[DEBUG] eval_binary: op=%d\n", node->data.binary.op);
   if (l_node->type == AST_VAR_REF && l_node->data.var_ref.slot != -1 &&
       env->slots) {
     left = env->slots[l_node->data.var_ref.slot];
@@ -1024,477 +1068,663 @@ static Value eval_binary(AstNode *node, Environment *env) {
   }
 
   if (left.type == VAL_STR && op == OP_ADD) {
-    if (right.type == VAL_STR) {
-      char *res = nr_malloc(strlen(left.data.s) + strlen(right.data.s) + 1);
-      strcpy(res, left.data.s);
-      strcat(res, right.data.s);
-      return val_str(res);
-    }
+    Value sr = val_to_str(right);
+    char *res = nr_malloc(strlen(left.data.s) + strlen(sr.data.s) + 1);
+    strcpy(res, left.data.s);
+    strcat(res, sr.data.s);
+    return val_str(res);
+  }
+  if (right.type == VAL_STR && op == OP_ADD) {
+    Value sl = val_to_str(left);
+    char *res = nr_malloc(strlen(sl.data.s) + strlen(right.data.s) + 1);
+    strcpy(res, sl.data.s);
+    strcat(res, right.data.s);
+    return val_str(res);
   }
 
   return val_nil();
 }
 
-static Value eval_call(AstNode *node, Environment *env) {
-  if (!node->data.call.name)
+static Value val_to_str(Value v) {
+  if (v.type == VAL_RETURN)
+    v = *v.data.return_val;
+  char buf[128];
+  if (v.type == VAL_INT) {
+    snprintf(buf, sizeof(buf), "%lld", v.data.i);
+    return val_str(nr_strdup(buf));
+  }
+  if (v.type == VAL_FLOAT) {
+    snprintf(buf, sizeof(buf), "%g", v.data.f);
+    return val_str(nr_strdup(buf));
+  }
+  if (v.type == VAL_BOOL)
+    return val_str(nr_strdup(v.data.i ? "true" : "false"));
+  if (v.type == VAL_STR)
+    return v;
+  if (v.type == VAL_NIL)
+    return val_str(nr_strdup("nil"));
+  if (v.type == VAL_OBJ)
+    return val_str(nr_strdup("[Object]"));
+  if (v.type == VAL_ARR)
+    return val_str(nr_strdup("[Array]"));
+  return val_str(nr_strdup("[Value]"));
+}
+
+static Value call_native_func(void *ptr, AstNode *node, Environment *env) {
+  int argc = node->data.call.arg_count;
+  Value args[10];
+  for (int i = 0; i < argc && i < 10; i++) {
+    args[i] = eval(node->data.call.args[i], env);
+    if (args[i].type == VAL_RETURN)
+      args[i] = *args[i].data.return_val;
+  }
+
+  switch (argc) {
+  case 0:
+    return ((Value(*)())ptr)();
+  case 1:
+    return ((Value(*)(Value))ptr)(args[0]);
+  case 2:
+    return ((Value(*)(Value, Value))ptr)(args[0], args[1]);
+  case 3:
+    return ((Value(*)(Value, Value, Value))ptr)(args[0], args[1], args[2]);
+  case 4:
+    return ((Value(*)(Value, Value, Value, Value))ptr)(args[0], args[1], args[2],
+                                                       args[3]);
+  case 5:
+    return ((Value(*)(Value, Value, Value, Value, Value))ptr)(
+        args[0], args[1], args[2], args[3], args[4]);
+  case 6:
+    return ((Value(*)(Value, Value, Value, Value, Value, Value))ptr)(
+        args[0], args[1], args[2], args[3], args[4], args[5]);
+  default:
     return val_nil();
-  char *full_name = nr_strdup(node->data.call.name);
-  char *dot = strchr(full_name, '.');
+  }
+}
+
+static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static char *nr_base64_encode(const char *src, int len) {
+  int out_len = 4 * ((len + 2) / 3);
+  char *res = nr_malloc(out_len + 1);
+  int i, j;
+  for (i = 0, j = 0; i < len;) {
+    uint32_t octet_a = i < len ? (unsigned char)src[i++] : 0;
+    uint32_t octet_b = i < len ? (unsigned char)src[i++] : 0;
+    uint32_t octet_c = i < len ? (unsigned char)src[i++] : 0;
+    uint32_t triple = (octet_a << 0x10) + (octet_b << 0x08) + octet_c;
+    res[j++] = b64_table[(triple >> 3 * 6) & 0x3F];
+    res[j++] = b64_table[(triple >> 2 * 6) & 0x3F];
+    res[j++] = b64_table[(triple >> 1 * 6) & 0x3F];
+    res[j++] = b64_table[(triple >> 0 * 6) & 0x3F];
+  }
+  for (int k = 0; k < (3 - len % 3) % 3; k++) res[out_len - 1 - k] = '=';
+  res[out_len] = '\0';
+  return res;
+}
+
+static char *nr_base64_decode(const char *src) {
+  int len = strlen(src);
+  if (len % 4 != 0) return nr_strdup("");
+  int out_len = len / 4 * 3;
+  if (src[len - 1] == '=') out_len--;
+  if (src[len - 2] == '=') out_len--;
+  char *res = nr_malloc(out_len + 1);
+  static char dec_table[256];
+  static int init = 0;
+  if (!init) {
+    for (int i = 0; i < 64; i++) dec_table[(int)b64_table[i]] = i;
+    init = 1;
+  }
+  for (int i = 0, j = 0; i < len;) {
+    uint32_t sextet_a = src[i] == '=' ? 0 & i++ : dec_table[(int)src[i++]];
+    uint32_t sextet_b = src[i] == '=' ? 0 & i++ : dec_table[(int)src[i++]];
+    uint32_t sextet_c = src[i] == '=' ? 0 & i++ : dec_table[(int)src[i++]];
+    uint32_t sextet_d = src[i] == '=' ? 0 & i++ : dec_table[(int)src[i++]];
+    uint32_t triple = (sextet_a << 3 * 6) + (sextet_b << 2 * 6) + (sextet_c << 1 * 6) + (sextet_d << 0 * 6);
+    if (j < out_len) res[j++] = (triple >> 2 * 8) & 0xFF;
+    if (j < out_len) res[j++] = (triple >> 1 * 8) & 0xFF;
+    if (j < out_len) res[j++] = (triple >> 0 * 8) & 0xFF;
+  }
+  res[out_len] = '\0';
+  return res;
+}
+
+static char *nr_bin2hex(const char *src, int len) {
+  char *res = nr_malloc(len * 2 + 1);
+  for (int i = 0; i < len; i++) {
+    sprintf(res + (i * 2), "%02x", (unsigned char)src[i]);
+  }
+  res[len * 2] = '\0';
+  return res;
+}
+
+static char *nr_hex2bin(const char *src) {
+  int len = strlen(src);
+  if (len % 2 != 0) return nr_strdup("");
+  char *res = nr_malloc(len / 2 + 1);
+  for (int i = 0; i < len / 2; i++) {
+    unsigned int val;
+    sscanf(src + (i * 2), "%2x", &val);
+    res[i] = (char)val;
+  }
+  res[len / 2] = '\0';
+  return res;
+}
+
+static Value eval_call(AstNode *node, Environment *env) {
   Value func_val = val_nil();
   Value obj = val_nil();
+  int is_sugar = 0;
 
-  if (dot) {
-    *dot = '\0';
-    char *obj_name = full_name;
-    char *field_name = dot + 1;
+  if (node->type == AST_CALL) {
+    if (!node->data.call.name) return val_nil();
+    char *full_name = nr_strdup(node->data.call.name);
+    char *dot = strchr(full_name, '.');
 
-    if (node->data.call.obj_slot != -1 && env->slots) {
-      obj = env->slots[node->data.call.obj_slot];
-    } else {
-      obj = env_get(env, obj_name);
-      if (obj.type == VAL_NIL && strcmp(obj_name, "object") == 0) {
-        obj = val_obj(); // Dummy object to allow built-ins
+    if (dot) {
+      *dot = '\0';
+      char *obj_name = full_name;
+      char *field_name = dot + 1;
+
+      if (node->data.call.obj_slot != -1 && env->slots) {
+        obj = env->slots[node->data.call.obj_slot];
+      } else {
+        obj = env_get(env, obj_name);
+        if (obj.type == VAL_NIL && strcmp(obj_name, "object") == 0) {
+          obj = val_obj();
+        }
       }
-    }
 
-    if (obj.type == VAL_ARR) {
-      if (strcmp(field_name, "push") == 0) {
-        if (node->data.call.arg_count > 0) {
-          Value val = eval(node->data.call.args[0], env);
-          if (val.type == VAL_RETURN)
-            val = *val.data.return_val;
+      // Handle Built-in Methods
+      if (obj.type == VAL_ARR) {
+        if (strcmp(field_name, "push") == 0) {
+          if (node->data.call.arg_count > 0) {
+            Value val = eval(node->data.call.args[0], env);
+            if (val.type == VAL_RETURN) val = *val.data.return_val;
+            nr_rt_push(obj, val);
+            return val;
+          }
+        } else if (strcmp(field_name, "pop") == 0) {
           Array *arr = obj.data.arr;
-          if (arr->count >= arr->capacity) {
-            int old_cap = arr->capacity;
-            arr->capacity *= 2;
-            arr->elements = nr_realloc(arr->elements, sizeof(Value *) * old_cap,
-                                       sizeof(Value *) * arr->capacity);
+          if (arr->count > 0) {
+            arr->count--;
+            return *arr->elements[arr->count];
           }
-          arr->elements[arr->count] = nr_malloc(sizeof(Value));
-          *arr->elements[arr->count] = val;
-          arr->count++;
-          return val;
+          return val_nil();
+        } else if (strcmp(field_name, "length") == 0) {
+          return val_int(obj.data.arr->count);
         }
-      } else if (strcmp(field_name, "pop") == 0) {
-        Array *arr = obj.data.arr;
-        if (arr->count > 0) {
-          arr->count--;
-          return *arr->elements[arr->count];
-        }
-        return val_nil();
-      } else if (strcmp(field_name, "length") == 0) {
-        return val_int(obj.data.arr->count);
       }
-    }
 
-    if (obj.type == VAL_STR) {
-      if (strcmp(field_name, "length") == 0)
+      if (obj.type == VAL_STR && strcmp(field_name, "length") == 0) {
         return val_int(strlen(obj.data.s));
-    }
-
-    if (strcmp(obj_name, "object") == 0) {
-      if (strcmp(field_name, "keys") == 0) {
-        Value arg = eval(node->data.call.args[0], env);
-        if (arg.type == VAL_RETURN)
-          arg = *arg.data.return_val;
-        if (arg.type != VAL_OBJ)
-          return val_arr();
-        Value res = val_arr();
-        for (int i = 0; i < arg.data.obj->count; i++) {
-          array_push(res.data.arr, val_str(nr_strdup(arg.data.obj->keys[i])));
-        }
-        return res;
-      } else if (strcmp(field_name, "values") == 0) {
-        Value arg = eval(node->data.call.args[0], env);
-        if (arg.type == VAL_RETURN)
-          arg = *arg.data.return_val;
-        if (arg.type != VAL_OBJ)
-          return val_arr();
-        Value res = val_arr();
-        for (int i = 0; i < arg.data.obj->count; i++) {
-          array_push(res.data.arr, *arg.data.obj->values[i]);
-        }
-        return res;
       }
-    }
 
-    func_val = get_dot_value(obj, field_name);
-    if (func_val.type == VAL_NIL)
-      func_val = env_get_by_hash(env, field_name, node->data.call.hash);
-  } else {
-    if (strcmp(full_name, "__builtin_file_read") == 0) {
-      Value path = eval(node->data.call.args[0], env);
-      if (path.type != VAL_STR)
-        return val_nil();
-      char *s = nr_read_file_internal(path.data.s);
-      return s ? val_str(s) : val_nil();
-    }
-    if (strcmp(full_name, "__builtin_json_encode") == 0 ||
-        strcmp(full_name, "__builtin_json_stringify") == 0) {
-      Value v = eval(node->data.call.args[0], env);
-      return val_str(nr_json_encode(v));
-    }
-    if (strcmp(full_name, "__builtin_json_parse") == 0) {
-      Value s = eval(node->data.call.args[0], env);
-      if (s.type != VAL_STR)
-        return val_nil();
-      const char *p = s.data.s;
-      return nr_json_parse(&p);
-    }
-    if (strcmp(full_name, "__builtin_http_serve") == 0) {
-      Value port_v = eval(node->data.call.args[0], env);
-      Value routes_v = eval(node->data.call.args[1], env);
-      int port = (int)port_v.data.i;
-      int server_fd;
-      struct sockaddr_in address;
-      address.sin_family = AF_INET;
-      address.sin_addr.s_addr = INADDR_ANY;
-      address.sin_port = htons(port);
-
-      while (1) {
-        server_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (server_fd < 0) {
-          perror("socket failed");
-          return val_nil();
-        }
-        int opt = 1;
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-#ifdef SO_REUSEPORT
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-#endif
-        if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-          if (errno == EADDRINUSE) {
-            printf("⚠️  Port %d is busy, retrying in 2s...\n", port);
-            fflush(stdout);
-            close(server_fd);
-            sleep(2);
-            continue;
-          }
-          perror("bind failed");
-          close(server_fd);
-          return val_nil();
-        }
-        break;
-      }
-      if (listen(server_fd, 3) < 0) {
-        perror("listen failed"); return val_nil();
-      }
-      printf("Nira Server listening on port %d...\n", port);
-      fflush(stdout);
-      while (1) {
-        int new_socket = accept(server_fd, NULL, NULL);
-        if (new_socket < 0) continue;
-        char buffer[8192] = {0};
-        read(new_socket, buffer, sizeof(buffer) - 1);
-        char method[16] = {0}, req_path[512] = {0};
-        sscanf(buffer, "%15s %511s", method, req_path);
-        Value req = val_obj();
-        set_field(req, "method", val_str(nr_strdup(method)));
-        set_field(req, "path", val_str(nr_strdup(req_path)));
-        char *body_ptr = strstr(buffer, "\r\n\r\n");
-        set_field(req, "body", val_str(nr_strdup(body_ptr ? body_ptr + 4 : "")));
-        Value res_v = val_nil();
-        int matched = 0;
-        if (routes_v.type == VAL_ARR) {
-          for (int ri = 0; ri < routes_v.data.arr->count; ri++) {
-            Value route = *routes_v.data.arr->elements[ri];
-            if (route.type != VAL_OBJ) continue;
-            Value r_method = get_field(route, "method");
-            Value r_path = get_field(route, "path");
-            Value r_handler = get_field(route, "handler");
-            if (r_method.type != VAL_STR || r_path.type != VAL_STR) continue;
-            if (strcmp(r_method.data.s, method) != 0) continue;
-            int path_match = 0;
-            if (strcmp(r_path.data.s, req_path) == 0) {
-              path_match = 1;
-            } else {
-              char *colon = strchr(r_path.data.s, ':');
-              if (colon) {
-                int prefix_len = (int)(colon - r_path.data.s);
-                if (strncmp(r_path.data.s, req_path, prefix_len) == 0) {
-                  Value params = val_obj();
-                  char pn[64] = {0};
-                  strncpy(pn, colon + 1, sizeof(pn) - 1);
-                  set_field(params, pn, val_str(nr_strdup(req_path + prefix_len)));
-                  set_field(req, "params", params);
-                  path_match = 1;
-                }
+      if (strcmp(obj_name, "object") == 0 && strcmp(field_name, "keys") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value arg = eval(node->data.call.args[0], env);
+          if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+          if (arg.type == VAL_OBJ) {
+            Value arr = val_arr();
+            for (int i = 0; i < arg.data.obj->count; i++) {
+              if (arg.data.obj->keys[i]) {
+                nr_rt_push(arr, val_str(arg.data.obj->keys[i]));
               }
             }
-            if (!path_match) continue;
-            matched = 1;
-            if (r_handler.type == VAL_FUNC) {
-              AstNode *decl = r_handler.data.func.decl;
-              Environment *call_env = env_new(r_handler.data.func.closure, decl->data.func_decl.local_count);
-              int pc = decl->data.func_decl.param_count;
-              if (call_env->slots) {
-                if (pc > 0) call_env->slots[0] = req;
-                if (pc > 1) call_env->slots[1] = val_obj();
-              } else {
-                if (pc > 0) env_define(call_env, decl->data.func_decl.params[0], req);
-                if (pc > 1) env_define(call_env, decl->data.func_decl.params[1], val_obj());
-              }
-              res_v = eval(decl->data.func_decl.body, call_env);
-              env_free(call_env);
-              if (res_v.type == VAL_RETURN) res_v = *res_v.data.return_val;
-            }
-            break;
+            return arr;
           }
         }
-        char *body = "Not Found";
-        char *content_type = "text/html";
-        int status = matched ? 200 : 404;
-        if (res_v.type == VAL_OBJ) {
-          Value b = get_field(res_v, "body"); if (b.type == VAL_STR) body = b.data.s;
-          Value s = get_field(res_v, "status"); if (s.type == VAL_INT) status = (int)s.data.i;
-          Value ct = get_field(res_v, "content_type"); if (ct.type == VAL_STR) content_type = ct.data.s;
-        } else if (res_v.type == VAL_STR) {
-          body = res_v.data.s; status = 200;
-        }
-        int body_len = (int)strlen(body);
-        char header[512];
-        int hlen = snprintf(header, sizeof(header),
-          "HTTP/1.1 %d OK\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
-          status, content_type, body_len);
-        write(new_socket, header, hlen);
-        write(new_socket, body, body_len);
-        close(new_socket);
+        return val_arr();
       }
-    }
-    if (strcmp(full_name, "__builtin_file_write") == 0) {
-      Value path = eval(node->data.call.args[0], env);
-      Value content = eval(node->data.call.args[1], env);
-      if (path.type != VAL_STR || content.type != VAL_STR) return val_nil();
-      FILE *f = fopen(path.data.s, "wb");
-      if (f) {
-        fwrite(content.data.s, 1, strlen(content.data.s), f);
-        fclose(f);
+
+      // Resolve field function
+      func_val = get_dot_value(obj, field_name);
+
+      // Method Sugar Fallback
+      if (func_val.type == VAL_NIL) {
+        func_val = env_get(env, field_name);
+        if (func_val.type == VAL_FUNC) {
+          is_sugar = 1;
+        }
+      }
+    } else {
+      if (strcmp(full_name, "typeof") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value v = eval(node->data.call.args[0], env);
+          if (v.type == VAL_RETURN) v = *v.data.return_val;
+          switch (v.type) {
+            case VAL_NIL: return val_str(nr_strdup("nil"));
+            case VAL_INT: return val_str(nr_strdup("int"));
+            case VAL_FLOAT: return val_str(nr_strdup("float"));
+            case VAL_STR: return val_str(nr_strdup("string"));
+            case VAL_OBJ: return val_str(nr_strdup("object"));
+            case VAL_ARR: return val_str(nr_strdup("array"));
+            case VAL_FUNC: return val_str(nr_strdup("function"));
+            case VAL_BOOL: return val_str(nr_strdup("bool"));
+            default: return val_str(nr_strdup("unknown"));
+          }
+        }
+        return val_str(nr_strdup("unknown"));
+      }
+
+      if (strcmp(full_name, "__builtin_keys") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value arg = eval(node->data.call.args[0], env);
+          if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+          if (arg.type == VAL_OBJ) {
+            Value arr = val_arr();
+            for (int i = 0; i < arg.data.obj->count; i++) {
+              if (arg.data.obj->keys[i]) {
+                nr_rt_push(arr, val_str(nr_strdup(arg.data.obj->keys[i])));
+              }
+            }
+            return arr;
+          }
+        }
+        return val_arr();
+      }
+
+      // Global Built-ins
+      if (strcmp(full_name, "__builtin_encoding_to_base64") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value data = eval(node->data.call.args[0], env);
+          if (data.type == VAL_RETURN) data = *data.data.return_val;
+          if (data.type == VAL_STR) return val_str(nr_base64_encode(data.data.s, strlen(data.data.s)));
+        }
+        return val_nil();
+      }
+      if (strcmp(full_name, "__builtin_encoding_from_base64") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value data = eval(node->data.call.args[0], env);
+          if (data.type == VAL_RETURN) data = *data.data.return_val;
+          if (data.type == VAL_STR) return val_str(nr_base64_decode(data.data.s));
+        }
+        return val_nil();
+      }
+      if (strcmp(full_name, "__builtin_encoding_to_hex") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value data = eval(node->data.call.args[0], env);
+          if (data.type == VAL_RETURN) data = *data.data.return_val;
+          if (data.type == VAL_STR) return val_str(nr_bin2hex(data.data.s, strlen(data.data.s)));
+        }
+        return val_nil();
+      }
+      if (strcmp(full_name, "__builtin_encoding_from_hex") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value data = eval(node->data.call.args[0], env);
+          if (data.type == VAL_RETURN) data = *data.data.return_val;
+          if (data.type == VAL_STR) return val_str(nr_hex2bin(data.data.s));
+        }
+        return val_nil();
+      }
+
+      if (strcmp(full_name, "__builtin_json_parse") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value data = eval(node->data.call.args[0], env);
+          if (data.type == VAL_RETURN) data = *data.data.return_val;
+          if (data.type == VAL_STR) {
+            const char *p = data.data.s;
+            return nr_json_parse(&p);
+          }
+        }
+        return val_nil();
+      }
+      if (strcmp(full_name, "__builtin_json_stringify") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value data = eval(node->data.call.args[0], env);
+          if (data.type == VAL_RETURN) data = *data.data.return_val;
+          return val_str(nr_json_encode(data));
+        }
+        return val_nil();
+      }
+
+      if (strcmp(full_name, "print") == 0 || strcmp(full_name, "println") == 0) {
+        for (int i = 0; i < node->data.call.arg_count; i++) {
+          Value v = eval(node->data.call.args[i], env);
+          if (v.type == VAL_RETURN) v = *v.data.return_val;
+          print_value(v);
+          if (i < node->data.call.arg_count - 1) printf(" ");
+        }
+        printf("\n");
+        fflush(stdout);
+        return val_nil();
+      }
+      
+      if (strcmp(full_name, "toString") == 0 || strcmp(full_name, "__builtin_conv_to_str") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        return val_to_str(v);
+      }
+
+      if (strcmp(full_name, "__builtin_conv_to_int") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        if (v.type == VAL_RETURN) v = *v.data.return_val;
+        if (v.type == VAL_STR) return val_int(atoll(v.data.s));
+        if (v.type == VAL_FLOAT) return val_int((long long)v.data.f);
+        if (v.type == VAL_BOOL) return val_int(v.data.i);
+        if (v.type == VAL_INT) return v;
+        return val_int(0);
+      }
+
+      if (strcmp(full_name, "__builtin_conv_to_float") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        if (v.type == VAL_RETURN) v = *v.data.return_val;
+        if (v.type == VAL_STR) return val_float(atof(v.data.s));
+        if (v.type == VAL_INT) return val_float((double)v.data.i);
+        if (v.type == VAL_BOOL) return val_float((double)v.data.i);
+        if (v.type == VAL_FLOAT) return v;
+        return val_float(0);
+      }
+
+      if (strcmp(full_name, "__builtin_conv_to_bool") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        if (v.type == VAL_RETURN) v = *v.data.return_val;
+        if (v.type == VAL_INT) return val_bool(v.data.i != 0);
+        if (v.type == VAL_FLOAT) return val_bool(v.data.f != 0);
+        if (v.type == VAL_STR) return val_bool(v.data.s && strlen(v.data.s) > 0);
+        if (v.type == VAL_NIL) return val_bool(0);
         return val_bool(1);
       }
-      return val_bool(0);
-    }
-    if (strcmp(full_name, "__builtin_file_delete") == 0) {
-      Value path = eval(node->data.call.args[0], env);
-      if (path.type != VAL_STR) return val_nil();
-      return val_bool(remove(path.data.s) == 0);
-    }
-    if (strcmp(full_name, "__builtin_file_exists") == 0) {
-      Value path = eval(node->data.call.args[0], env);
-      if (path.type != VAL_STR) return val_nil();
-      return val_bool(access(path.data.s, F_OK) == 0);
-    }
-    if (strcmp(full_name, "__builtin_args") == 0) {
-      extern int g_argc;
-      extern char **g_argv;
-      Value res = val_arr();
-      for (int i = 0; i < g_argc; i++) {
-        nr_rt_push(res, val_str(nr_strdup(g_argv[i])));
-      }
-      return res;
-    }
-    if (strcmp(full_name, "__builtin_time_now") == 0) {
-      struct timeval tv;
-      gettimeofday(&tv, NULL);
-      return val_float((double)tv.tv_sec + (double)tv.tv_usec / 1000000.0);
-    }
-    if (strcmp(full_name, "__builtin_exit_proc") == 0) {
-      Value code = eval(node->data.call.args[0], env);
-      exit(code.type == VAL_INT ? (int)code.data.i : 0);
-      return val_nil();
-    }
-    if (strcmp(full_name, "__builtin_delay") == 0) {
-      Value ms = eval(node->data.call.args[0], env);
-      if (ms.type == VAL_INT) usleep(ms.data.i * 1000);
-      return val_nil();
-    }
 
-    if (strcmp(full_name, "print") == 0 || strcmp(full_name, "println") == 0) {
-      int is_println = strcmp(full_name, "println") == 0;
-      for (int i = 0; i < node->data.call.arg_count; i++) {
-        Value arg = eval(node->data.call.args[i], env);
-        if (arg.type == VAL_RETURN)
-          arg = *arg.data.return_val;
-        if (arg.type == VAL_INT)
-          printf("%lld", arg.data.i);
-        else if (arg.type == VAL_FLOAT)
-          printf("%g", arg.data.f);
-        else if (arg.type == VAL_BOOL)
-          printf("%s", arg.data.i ? "true" : "false");
-        else if (arg.type == VAL_STR)
-          printf("%s", arg.data.s);
-        else if (arg.type == VAL_OBJ)
-          printf("[Object]");
-        else if (arg.type == VAL_ARR)
-          printf("[Array]");
-        else if (arg.type == VAL_ERROR)
-          printf("Error: %s", arg.data.s);
-        else
-          printf("nil");
-        if (i < node->data.call.arg_count - 1)
-          printf(" ");
+      if (strcmp(full_name, "__builtin_parse_int") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        if (v.type == VAL_RETURN) v = *v.data.return_val;
+        if (v.type == VAL_STR) return val_int(atoll(v.data.s));
+        return val_int(0);
       }
-      if (is_println)
-        printf("\n");
-      fflush(stdout);
-      return val_nil();
-    }
-    if (strcmp(full_name, "len") == 0) {
-      Value arg = eval(node->data.call.args[0], env);
-      if (arg.type == VAL_RETURN)
-        arg = *arg.data.return_val;
-      if (arg.type == VAL_ARR)
-        return val_int(arg.data.arr->count);
-      if (arg.type == VAL_STR)
-        return val_int(strlen(arg.data.s));
-      if (arg.type == VAL_OBJ)
-        return val_int(arg.data.obj->count);
-      return val_int(0);
-    }
-    if (strcmp(full_name, "typeof") == 0) {
-      Value arg = eval(node->data.call.args[0], env);
-      if (arg.type == VAL_RETURN)
-        arg = *arg.data.return_val;
-      switch (arg.type) {
-      case VAL_NIL:
-        return val_str("null");
-      case VAL_INT:
-        return val_str("int");
-      case VAL_FLOAT:
-        return val_str("float");
-      case VAL_STR:
-        return val_str("string");
-      case VAL_BOOL:
-        return val_str("bool");
-      case VAL_OBJ:
-        return val_str("object");
-      case VAL_ARR:
-        return val_str("array");
-      case VAL_FUNC:
-        return val_str("function");
-      default:
-        return val_str("unknown");
-      }
-    }
-    if (strcmp(full_name, "toString") == 0) {
-      Value v = eval(node->data.call.args[0], env);
-      if (v.type == VAL_RETURN)
-        v = *v.data.return_val;
-      char buf[128];
-      if (v.type == VAL_INT) {
-        snprintf(buf, sizeof(buf), "%lld", v.data.i);
-        return val_str(nr_strdup(buf));
-      }
-      if (v.type == VAL_FLOAT) {
-        snprintf(buf, sizeof(buf), "%g", v.data.f);
-        return val_str(nr_strdup(buf));
-      }
-      if (v.type == VAL_BOOL)
-        return val_str(nr_strdup(v.data.i ? "true" : "false"));
-      if (v.type == VAL_STR)
-        return v;
-      if (v.type == VAL_NIL)
-        return val_str(nr_strdup("nil"));
-      if (v.type == VAL_OBJ)
-        return val_str(nr_strdup("[Object]"));
-      if (v.type == VAL_ARR)
-        return val_str(nr_strdup("[Array]"));
-      return val_str(nr_strdup("[Value]"));
-    }
-    if (strcmp(full_name, "toInt") == 0) {
-      Value v = eval(node->data.call.args[0], env);
-      if (v.type == VAL_RETURN)
-        v = *v.data.return_val;
-      if (v.type == VAL_INT)
-        return v;
-      if (v.type == VAL_STR)
-        return val_int(atoll(v.data.s));
-      if (v.type == VAL_FLOAT)
-        return val_int((long long)v.data.f);
-      return val_int(0);
-    }
 
-    if (node->data.call.cached_decl) {
-      func_val = val_func(node->data.call.cached_decl, env);
-      Environment *root = env;
-      while (root->parent)
-        root = root->parent;
-      func_val.data.func.closure = root;
-    } else {
-      func_val = env_get(env, full_name);
-      if (func_val.type == VAL_FUNC)
-        node->data.call.cached_decl = func_val.data.func.decl;
+      if (strcmp(full_name, "__builtin_parse_float") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        if (v.type == VAL_RETURN) v = *v.data.return_val;
+        if (v.type == VAL_STR) return val_float(atof(v.data.s));
+        return val_float(0);
+      }
+
+      if (strcmp(full_name, "__builtin_parse_bool") == 0) {
+        Value v = eval(node->data.call.args[0], env);
+        if (v.type == VAL_RETURN) v = *v.data.return_val;
+        if (v.type == VAL_STR) {
+            if (strcmp(v.data.s, "true") == 0) return val_bool(1);
+            if (strcmp(v.data.s, "false") == 0) return val_bool(0);
+        }
+        return val_bool(0);
+      }
+
+      if (strcmp(full_name, "len") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value arg = eval(node->data.call.args[0], env);
+          if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+          if (arg.type == VAL_ARR) return val_int(arg.data.arr->count);
+          if (arg.type == VAL_STR) return val_int(strlen(arg.data.s));
+        }
+        return val_int(0);
+      }
+
+      if (strcmp(full_name, "__builtin_obj_keys") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value arg = eval(node->data.call.args[0], env);
+          if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+          if (arg.type == VAL_OBJ) {
+            Value arr = val_arr();
+            for (int i = 0; i < arg.data.obj->count; i++) {
+              if (arg.data.obj->keys[i]) {
+                nr_rt_push(arr, val_str(arg.data.obj->keys[i]));
+              }
+            }
+            return arr;
+          }
+        }
+        return val_arr();
+      }
+      
+      if (strcmp(full_name, "__builtin_file_read") == 0) {
+        Value path = eval(node->data.call.args[0], env);
+        if (path.type != VAL_STR) return val_nil();
+        char *s = nr_read_file_internal(path.data.s);
+        return s ? val_str(s) : val_nil();
+      }
+
+      if (strcmp(full_name, "__builtin_time_now") == 0) {
+        return val_int((long long)time(NULL));
+      }
+
+      if (strcmp(full_name, "__builtin_time_to_unix") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value obj = eval(node->data.call.args[0], env);
+          if (obj.type == VAL_RETURN) obj = *obj.data.return_val;
+          if (obj.type == VAL_OBJ) {
+            struct tm t = {0};
+            t.tm_year = (int)get_field(obj, "year").data.i - 1900;
+            t.tm_mon = (int)get_field(obj, "month").data.i - 1;
+            t.tm_mday = (int)get_field(obj, "day").data.i;
+            return val_int((long long)mktime(&t));
+          }
+        }
+        return val_int(0);
+      }
+
+      if (strcmp(full_name, "__builtin_delay") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value ms = eval(node->data.call.args[0], env);
+          if (ms.type == VAL_RETURN) ms = *ms.data.return_val;
+          if (ms.type == VAL_INT) usleep(ms.data.i * 1000);
+        }
+        return val_nil();
+      }
+
+      if (strcmp(full_name, "__builtin_args") == 0) {
+        Value arr = val_arr();
+        for (int i = 0; i < g_argc; i++) {
+          nr_rt_push(arr, val_str(g_argv[i]));
+        }
+        return arr;
+      }
+
+      if (strcmp(full_name, "__builtin_exit_proc") == 0) {
+        if (node->data.call.arg_count == 1) {
+          Value code = eval(node->data.call.args[0], env);
+          if (code.type == VAL_RETURN) code = *code.data.return_val;
+          exit((int)code.data.i);
+        }
+        exit(0);
+        return val_nil();
+      }
+
+      if (strcmp(full_name, "__builtin_sqlite3_open") == 0) {
+        Value path = eval(node->data.call.args[0], env);
+        if (path.type == VAL_RETURN) path = *path.data.return_val;
+        if (path.type != VAL_STR) return val_nil();
+        sqlite3 *db;
+        if (sqlite3_open(path.data.s, &db) != SQLITE_OK) return val_nil();
+        return val_int((long long)db);
+      }
+
+      if (strcmp(full_name, "__builtin_sqlite3_close") == 0) {
+        Value db_val = eval(node->data.call.args[0], env);
+        if (db_val.type == VAL_RETURN) db_val = *db_val.data.return_val;
+        if (db_val.type != VAL_INT) return val_nil();
+        sqlite3_close((sqlite3 *)db_val.data.i);
+        return val_nil();
+      }
+
+      if (strcmp(full_name, "__builtin_sqlite3_exec") == 0) {
+        Value db_val = eval(node->data.call.args[0], env);
+        if (db_val.type == VAL_RETURN) db_val = *db_val.data.return_val;
+        Value sql = eval(node->data.call.args[1], env);
+        if (sql.type == VAL_RETURN) sql = *sql.data.return_val;
+        Value params = eval(node->data.call.args[2], env);
+        if (params.type == VAL_RETURN) params = *params.data.return_val;
+
+        if (db_val.type != VAL_INT || sql.type != VAL_STR) return val_nil();
+        sqlite3 *db = (sqlite3 *)db_val.data.i;
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL) != SQLITE_OK)
+          return val_error((char *)sqlite3_errmsg(db));
+
+        if (params.type == VAL_ARR) {
+          for (int i = 0; i < params.data.arr->count; i++) {
+            Value p = *params.data.arr->elements[i];
+            if (p.type == VAL_INT) sqlite3_bind_int64(stmt, i + 1, p.data.i);
+            else if (p.type == VAL_FLOAT) sqlite3_bind_double(stmt, i + 1, p.data.f);
+            else if (p.type == VAL_STR) sqlite3_bind_text(stmt, i + 1, p.data.s, -1, SQLITE_TRANSIENT);
+            else if (p.type == VAL_NIL) sqlite3_bind_null(stmt, i + 1);
+          }
+        }
+        int res = sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+        return val_bool(res == SQLITE_DONE || res == SQLITE_OK);
+      }
+
+      if (strcmp(full_name, "__builtin_sqlite3_query") == 0) {
+        Value db_val = eval(node->data.call.args[0], env);
+        if (db_val.type == VAL_RETURN) db_val = *db_val.data.return_val;
+        Value sql = eval(node->data.call.args[1], env);
+        if (sql.type == VAL_RETURN) sql = *sql.data.return_val;
+        Value params = eval(node->data.call.args[2], env);
+        if (params.type == VAL_RETURN) params = *params.data.return_val;
+
+        if (db_val.type != VAL_INT || sql.type != VAL_STR) return val_nil();
+        sqlite3 *db = (sqlite3 *)db_val.data.i;
+        sqlite3_stmt *stmt;
+        if (sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL) != SQLITE_OK)
+          return val_error((char *)sqlite3_errmsg(db));
+
+        if (params.type == VAL_ARR) {
+          for (int i = 0; i < params.data.arr->count; i++) {
+            Value p = *params.data.arr->elements[i];
+            if (p.type == VAL_INT) sqlite3_bind_int64(stmt, i + 1, p.data.i);
+            else if (p.type == VAL_FLOAT) sqlite3_bind_double(stmt, i + 1, p.data.f);
+            else if (p.type == VAL_STR) sqlite3_bind_text(stmt, i + 1, p.data.s, -1, SQLITE_TRANSIENT);
+            else if (p.type == VAL_NIL) sqlite3_bind_null(stmt, i + 1);
+          }
+        }
+
+        Value res_arr = val_arr();
+        int cols = sqlite3_column_count(stmt);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+          Value row = val_obj();
+          for (int i = 0; i < cols; i++) {
+            const char *name = sqlite3_column_name(stmt, i);
+            int type = sqlite3_column_type(stmt, i);
+            Value val;
+            if (type == SQLITE_INTEGER)
+              val = val_int(sqlite3_column_int64(stmt, i));
+            else if (type == SQLITE_FLOAT)
+              val = val_float(sqlite3_column_double(stmt, i));
+            else if (type == SQLITE_TEXT)
+              val = val_str(nr_strdup((const char *)sqlite3_column_text(stmt, i)));
+            else
+              val = val_nil();
+            set_field(row, name, val);
+          }
+          nr_rt_push(res_arr, row);
+        }
+        sqlite3_finalize(stmt);
+        return res_arr;
+      }
+
+      // Resolve global function
+      func_val = env_get_by_hash(env, full_name, node->data.call.hash);
+      if (func_val.type == VAL_NIL) {
+        func_val = env_get(env, full_name);
+      }
+
+      // Fallback to native FFI
+      if (func_val.type == VAL_NIL) {
+        for (int i = 0; i < dl_handle_count; i++) {
+          void *ptr = dlsym(dl_handles[i], full_name);
+          if (ptr) {
+            return call_native_func(ptr, node, env);
+          }
+        }
+      }
     }
+  } else if (node->type == AST_FUNC_DECL) {
+    func_val = val_func(node, env);
   }
 
   if (func_val.type == VAL_FUNC) {
     AstNode *decl = func_val.data.func.decl;
-    Environment *call_env =
-        env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
-    if (obj.type != VAL_NIL)
+    // printf("DEBUG: Calling function %s, local_count=%d\n", decl->data.func_decl.name, decl->data.func_decl.local_count);
+    Environment *call_env = env_new(func_val.data.func.closure, decl->data.func_decl.local_count);
+    
+    if (obj.type != VAL_NIL && !is_sugar)
       env_define(call_env, "self", obj);
-    // 1. Initialize with defaults
+
+    // Initialize params
     for (int i = 0; i < decl->data.func_decl.param_count; i++) {
-        if (decl->data.func_decl.param_defaults && decl->data.func_decl.param_defaults[i]) {
-            call_env->slots[i] = eval(decl->data.func_decl.param_defaults[i], env);
-        } else {
-            call_env->slots[i] = val_nil();
-        }
+      if (decl->data.func_decl.param_defaults && decl->data.func_decl.param_defaults[i])
+        call_env->slots[i] = eval(decl->data.func_decl.param_defaults[i], env);
+      else
+        call_env->slots[i] = val_nil();
     }
 
-    // 2. Bind positional arguments
     int pos_idx = 0;
-    int arg_idx = 0;
-    for (; arg_idx < node->data.call.arg_count; arg_idx++) {
-        if (node->data.call.arg_names && node->data.call.arg_names[arg_idx]) continue;
-        
+    if (is_sugar && pos_idx < decl->data.func_decl.param_count) {
+      call_env->slots[pos_idx++] = obj;
+    }
+
+    // Initialize params with defaults
+    for (int i = 0; i < decl->data.func_decl.param_count; i++) {
+      if (decl->data.func_decl.param_defaults && decl->data.func_decl.param_defaults[i])
+        call_env->slots[i] = eval(decl->data.func_decl.param_defaults[i], env);
+      else if (i >= pos_idx)
+        call_env->slots[i] = val_nil();
+    }
+
+    if (node->type == AST_CALL) {
+      // Positional arguments
+      for (int i = 0; i < node->data.call.arg_count; i++) {
+        if (node->data.call.arg_names && node->data.call.arg_names[i]) continue;
         if (pos_idx < decl->data.func_decl.param_count) {
-            if (decl->data.func_decl.is_variadic && pos_idx == decl->data.func_decl.param_count - 1) {
-                break; // Stop for variadic packing
-            }
-            Value arg = eval(node->data.call.args[arg_idx], env);
-            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-            call_env->slots[pos_idx++] = arg;
+          Value arg = eval(node->data.call.args[i], env);
+          if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+          call_env->slots[pos_idx++] = arg;
         }
-    }
+      }
 
-    // 3. Bind named arguments
-    for (int i = 0; i < node->data.call.arg_count; i++) {
-        if (!node->data.call.arg_names || !node->data.call.arg_names[i]) continue;
-        char* name = node->data.call.arg_names[i];
-        int slot = -1;
-        for (int j=0; j<decl->data.func_decl.param_count; j++) {
+      // Named arguments
+      for (int i = 0; i < node->data.call.arg_count; i++) {
+        if (node->data.call.arg_names && node->data.call.arg_names[i]) {
+          char *name = node->data.call.arg_names[i];
+          for (int j = 0; j < decl->data.func_decl.param_count; j++) {
             if (strcmp(decl->data.func_decl.params[j], name) == 0) {
-                slot = j; break;
+              Value arg = eval(node->data.call.args[i], env);
+              if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
+              call_env->slots[j] = arg;
+              break;
             }
+          }
         }
-        if (slot != -1) {
-            Value arg = eval(node->data.call.args[i], env);
-            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-            call_env->slots[slot] = arg;
+      }
+
+      // Variadic arguments
+      if (decl->data.func_decl.is_variadic) {
+        int variadic_idx = decl->data.func_decl.param_count - 1;
+        int variadic_arg_count = node->data.call.arg_count - (variadic_idx - (is_sugar ? 1 : 0));
+        if (variadic_arg_count < 0) variadic_arg_count = 0;
+
+        Value var_arr = val_arr();
+        for (int i = 0; i < variadic_arg_count; i++) {
+          int arg_idx = (variadic_idx - (is_sugar ? 1 : 0)) + i;
+          if (arg_idx < node->data.call.arg_count) {
+             Value v = eval(node->data.call.args[arg_idx], env);
+             if (v.type == VAL_RETURN) v = *v.data.return_val;
+             array_push(var_arr.data.arr, v);
+          }
         }
+        call_env->slots[variadic_idx] = var_arr;
+      }
     }
 
-    // 4. Bind variadic arguments
-    if (decl->data.func_decl.is_variadic) {
-        Value var_arr = val_arr();
-        for (; arg_idx < node->data.call.arg_count; arg_idx++) {
-            if (node->data.call.arg_names && node->data.call.arg_names[arg_idx]) continue;
-            Value arg = eval(node->data.call.args[arg_idx], env);
-            if (arg.type == VAL_RETURN) arg = *arg.data.return_val;
-            nr_rt_push(var_arr, arg);
-        }
-        call_env->slots[decl->data.func_decl.param_count - 1] = var_arr;
-    }
     Value res = eval(decl->data.func_decl.body, call_env);
     env_free(call_env);
-    if (res.type == VAL_RETURN)
-      return *res.data.return_val;
+    if (res.type == VAL_RETURN) return *res.data.return_val;
     return res;
   }
 
   char err_buf[256];
-  snprintf(err_buf, sizeof(err_buf), "'%s' is not a function",
-           node->data.call.name);
+  snprintf(err_buf, sizeof(err_buf), "'%s' is not a function", (node->type == AST_CALL) ? node->data.call.name : "declaration");
   report_runtime_error(node, env, "TYPE", err_buf);
   return val_nil();
 }
@@ -1783,11 +2013,22 @@ Value eval(AstNode *node, Environment *env) {
         }
       }
     }
-    if (left.type == VAL_STR && op == OP_ADD && right.type == VAL_STR) {
+    if (left.type == VAL_STR && op == OP_ADD) {
+      Value sr = val_to_str(right);
       int len_l = strlen(left.data.s);
-      int len_r = strlen(right.data.s);
+      int len_r = strlen(sr.data.s);
       char *res = nr_malloc(len_l + len_r + 1);
       memcpy(res, left.data.s, len_l);
+      memcpy(res + len_l, sr.data.s, len_r);
+      res[len_l + len_r] = '\0';
+      return (Value){.type = VAL_STR, .length = len_l + len_r, .data.s = res};
+    }
+    if (right.type == VAL_STR && op == OP_ADD) {
+      Value sl = val_to_str(left);
+      int len_l = strlen(sl.data.s);
+      int len_r = strlen(right.data.s);
+      char *res = nr_malloc(len_l + len_r + 1);
+      memcpy(res, sl.data.s, len_l);
       memcpy(res + len_l, right.data.s, len_r);
       res[len_l + len_r] = '\0';
       return (Value){.type = VAL_STR, .length = len_l + len_r, .data.s = res};
@@ -1862,7 +2103,7 @@ Value eval(AstNode *node, Environment *env) {
     if (iter.type != VAL_ARR)
       report_runtime_error(node, env, "TYPE", "Cannot iterate over non-array");
     char *var_name = node->data.for_stmt.alias ? node->data.for_stmt.alias
-                                               : node->data.for_stmt.var;
+                                                : node->data.for_stmt.var;
     for (int i = 0; i < iter.data.arr->count; i++) {
       if (node->data.for_stmt.slot != -1 && env->slots) {
         Value val = *iter.data.arr->elements[i];
@@ -1938,11 +2179,27 @@ Value eval(AstNode *node, Environment *env) {
     if (idx.type == VAL_RETURN)
       idx = *idx.data.return_val;
     if (obj.type == VAL_ARR) {
+      if (idx.type == VAL_STR && strcmp(idx.data.s, "length") == 0) {
+        return val_int(obj.data.arr->count);
+      }
       if (idx.type != VAL_INT)
         report_runtime_error(node, env, "TYPE", "Array index must be integer");
       if (idx.data.i < 0 || idx.data.i >= obj.data.arr->count)
         report_runtime_error(node, env, "BOUNDS", "Array index out of bounds");
       return *obj.data.arr->elements[idx.data.i];
+    } else if (obj.type == VAL_STR) {
+      if (idx.type == VAL_STR && strcmp(idx.data.s, "length") == 0) {
+        return val_int(strlen(obj.data.s));
+      }
+      if (idx.type != VAL_INT)
+        report_runtime_error(node, env, "TYPE", "String index must be integer");
+      int len = strlen(obj.data.s);
+      if (idx.data.i < 0 || idx.data.i >= len)
+        report_runtime_error(node, env, "BOUNDS", "String index out of bounds");
+      char *s = nr_malloc(2);
+      s[0] = obj.data.s[idx.data.i];
+      s[1] = '\0';
+      return val_str(s);
     } else if (obj.type == VAL_OBJ) {
       char *key_str;
       if (idx.type == VAL_STR)
