@@ -151,30 +151,6 @@ Value nr_rt_to_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Valu
 Value nr_rt_from_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); if(l%4!=0) return val_nil(); int ol=l/4*3; if(v.data.s[l-1]=='=') ol--; if(v.data.s[l-2]=='=') ol--; char* res=nr_alloc(ol+1); static char dt[256]; static int built=0; if(!built){ for(int i=0;i<64;i++) dt[(unsigned char)B64T[i]]=i; built=1; } int i=0,j=0; while(i<l){ uint32_t a=dt[(unsigned char)v.data.s[i++]]; uint32_t b=dt[(unsigned char)v.data.s[i++]]; uint32_t c=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t d=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t t=(a<<18)|(b<<12)|(c<<6)|d; if(j<ol) res[j++]=(t>>16)&0xFF; if(j<ol) res[j++]=(t>>8)&0xFF; if(j<ol) res[j++]=t&0xFF; } res[ol]=0; return val_str(res); }
 Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if(res.data.arr->elements[j].type==v.type && res.data.arr->elements[j].data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }
 Value nr_rt_keys(Value self, Value obj, Value _v1, Value _v2, Value _v3, Value _v4) { if(obj.type!=VAL_OBJ) return val_arr(); Value res=val_arr(); for(int i=0;i<obj.data.obj->count;i++) if(obj.data.obj->keys[i]) nr_rt_push(val_nil(), res, val_str(nr_strdup(obj.data.obj->keys[i])), val_nil(), val_nil(), val_nil()); return res; }
-Value nr_rt_sqlite3_open(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4);
-Value nr_rt_sqlite3_close(Value self, Value db_v, Value _v1, Value _v2, Value _v3, Value _v4);
-Value nr_rt_sqlite3_exec(Value self, Value db_v, Value sql, Value params, Value _v3, Value _v4);
-Value nr_rt_sqlite3_query(Value self, Value db_v, Value sql, Value params, Value _v3, Value _v4);
-Value nr_rt_sqlite3_open(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4) {
-  if(path.type!=VAL_STR) return val_nil(); sqlite3* db; if(sqlite3_open(path.data.s, &db)!=SQLITE_OK) return val_nil();
-  Value conn = val_int((long long)db); Value m = val_obj(); set_field(m, "_conn", conn);
-  set_field(m, "exec", val_func(nr_rt_sqlite3_exec)); set_field(m, "query", val_func(nr_rt_sqlite3_query)); set_field(m, "close", val_func(nr_rt_sqlite3_close)); return m;
-}
-Value nr_rt_sqlite3_close(Value self, Value db_v, Value _v1, Value _v2, Value _v3, Value _v4) { Value conn = (self.type==VAL_OBJ) ? get_field(self, "_conn") : db_v; if(conn.type!=VAL_INT) return val_nil(); sqlite3_close((sqlite3*)conn.data.i); return val_nil(); }
-Value nr_rt_sqlite3_exec(Value self, Value db_v, Value sql_v, Value params_v, Value _v3, Value _v4) {
-  Value conn = (self.type==VAL_OBJ) ? get_field(self, "_conn") : db_v;
-  Value sql = (self.type==VAL_OBJ) ? db_v : sql_v;
-  Value params = (self.type==VAL_OBJ) ? sql_v : params_v;
-  if(conn.type!=VAL_INT || sql.type!=VAL_STR) return val_nil(); sqlite3* db=(sqlite3*)conn.data.i; sqlite3_stmt* stmt; if(sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL)!=SQLITE_OK) return val_nil();
-  if(params.type==VAL_ARR) for(int i=0;i<params.data.arr->count;i++){ Value p=params.data.arr->elements[i]; if(p.type==VAL_INT) sqlite3_bind_int64(stmt, i+1, p.data.i); else if(p.type==VAL_FLOAT) sqlite3_bind_double(stmt, i+1, p.data.f); else if(p.type==VAL_STR) sqlite3_bind_text(stmt, i+1, p.data.s, -1, SQLITE_TRANSIENT); else if(p.type==VAL_NIL) sqlite3_bind_null(stmt, i+1); }
-  int res=sqlite3_step(stmt); sqlite3_finalize(stmt); return val_bool(res==SQLITE_DONE || res==SQLITE_OK); }
-Value nr_rt_sqlite3_query(Value self, Value db_v, Value sql_v, Value params_v, Value _v3, Value _v4) {
-  Value conn = (self.type==VAL_OBJ) ? get_field(self, "_conn") : db_v;
-  Value sql = (self.type==VAL_OBJ) ? db_v : sql_v;
-  Value params = (self.type==VAL_OBJ) ? sql_v : params_v;
-  if(conn.type!=VAL_INT || sql.type!=VAL_STR) return val_nil(); sqlite3* db=(sqlite3*)conn.data.i; sqlite3_stmt* stmt; if(sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL)!=SQLITE_OK) return val_nil();
-  if(params.type==VAL_ARR) for(int i=0;i<params.data.arr->count;i++){ Value p=params.data.arr->elements[i]; if(p.type==VAL_INT) sqlite3_bind_int64(stmt, i+1, p.data.i); else if(p.type==VAL_FLOAT) sqlite3_bind_double(stmt, i+1, p.data.f); else if(p.type==VAL_STR) sqlite3_bind_text(stmt, i+1, p.data.s, -1, SQLITE_TRANSIENT); else if(p.type==VAL_NIL) sqlite3_bind_null(stmt, i+1); }
-  Value res_arr=val_arr(); int cols=sqlite3_column_count(stmt); while(sqlite3_step(stmt)==SQLITE_ROW){ Value row=val_obj(); for(int i=0;i<cols;i++){ const char* name=sqlite3_column_name(stmt, i); int type=sqlite3_column_type(stmt, i); Value val; if(type==SQLITE_INTEGER) val=val_int(sqlite3_column_int64(stmt, i)); else if(type==SQLITE_FLOAT) val=(Value){.type=VAL_FLOAT,.data.f=sqlite3_column_double(stmt, i)}; else if(type==SQLITE_TEXT) val=val_str(nr_strdup((const char*)sqlite3_column_text(stmt, i))); else val=val_nil(); set_field(row, name, val); } nr_rt_push(val_nil(), res_arr, row, val_nil(), val_nil(), val_nil()); } sqlite3_finalize(stmt); return res_arr; }
 
 Value nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Value _v4, Value _v5) {
   int server_fd; struct sockaddr_in addr; addr.sin_family=AF_INET; addr.sin_addr.s_addr=INADDR_ANY; addr.sin_port=htons(port_v.data.i);
@@ -281,7 +257,6 @@ Value nr_rt_load_module(const char* name) {
   if (strcmp(name, "parse") == 0) { Value m = val_obj(); set_field(m, "parseInt", val_func(nr_rt_parse_int)); set_field(m, "parseFloat", val_func(nr_rt_parse_float)); set_field(m, "parseBool", val_func(nr_rt_parse_bool)); return m; }
   if (strcmp(name, "encoding") == 0) { Value m = val_obj(); set_field(m, "toBase64", val_func(nr_rt_to_base64)); set_field(m, "fromBase64", val_func(nr_rt_from_base64)); return m; }
   if (strcmp(name, "collection") == 0) { Value m = val_obj(); set_field(m, "toSet", val_func(nr_rt_to_set)); return m; }
-  if (strcmp(name, "sqlite3") == 0) { Value m = val_obj(); set_field(m, "open", val_func(nr_rt_sqlite3_open)); set_field(m, "close", val_func(nr_rt_sqlite3_close)); set_field(m, "exec", val_func(nr_rt_sqlite3_exec)); set_field(m, "query", val_func(nr_rt_sqlite3_query)); return m; }
   if (strcmp(name, "object") == 0) { Value m = val_obj(); set_field(m, "keys", val_func(nr_rt_obj_keys)); set_field(m, "assign", val_func(nr_rt_obj_assign)); return m; }
   if (strcmp(name, "string") == 0) { Value m = val_obj(); return m; }
   if (strcmp(name, "array") == 0) { Value m = val_obj(); set_field(m, "push", val_func(nr_rt_push)); return m; }
@@ -342,6 +317,8 @@ int main(int argc, char** argv) {
   nr_v_db = nr_rt_load_module("sqlite3");
 ;
   nr_v__db = ({ Value _f = get_field(nr_v_db, "open"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v_db, val_str("tasks.db"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
+({ nr_rt_print(val_nil(), val_str("DB instance:"), val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
+({ nr_rt_print(val_nil(), nr_v__db, val_nil(), val_nil(), val_nil(), val_nil()); val_nil(); });
   nr_v_items = ({ Value _f = get_field(nr_v__db, "query"); _f.type==VAL_FUNC ? ((Value (*)(Value, Value, Value, Value, Value, Value))_f.data.func_ptr)(nr_v__db, val_str("SELECT * FROM tasks"), val_nil(), val_nil(), val_nil(), val_nil()) : val_nil(); });
   { Value _iter = nr_v_items; if (_iter.type == VAL_ARR) {
     for (int _i = 0; _i < _iter.data.arr->count; _i++) {

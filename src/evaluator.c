@@ -24,7 +24,6 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
-#include <sqlite3.h>
 
 extern char nira_std_lib_path[1024];
 
@@ -134,7 +133,7 @@ static Value nr_json_parse(const char **p) {
     Value arr = val_arr();
     while (**p && **p != ']') {
       Value val = nr_json_parse(p);
-      nr_rt_push(arr, val);
+      nr_rt_push(val_nil(), arr, val, val_nil(), val_nil(), val_nil());
       while (isspace(**p))
         (*p)++;
       if (**p == ',')
@@ -611,7 +610,7 @@ Value env_get(Environment *env, char *name) {
 
 void *nr_alloc(size_t sz) { return nr_malloc(sz); }
 
-Value nr_rt_push(Value arr, Value val) {
+Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4) {
   if (arr.type != VAL_ARR)
     return val_nil();
   if (arr.data.arr->count >= arr.data.arr->capacity) {
@@ -1112,34 +1111,20 @@ static Value val_to_str(Value v) {
 
 static Value call_native_func(void *ptr, AstNode *node, Environment *env) {
   int argc = node->data.call.arg_count;
-  Value args[10];
-  for (int i = 0; i < argc && i < 10; i++) {
-    args[i] = eval(node->data.call.args[i], env);
-    if (args[i].type == VAL_RETURN)
-      args[i] = *args[i].data.return_val;
+  Value args[5];
+  for (int i = 0; i < 5; i++) {
+    if (i < argc) {
+      args[i] = eval(node->data.call.args[i], env);
+      if (args[i].type == VAL_RETURN)
+        args[i] = *args[i].data.return_val;
+    } else {
+      args[i] = val_nil();
+    }
   }
 
-  switch (argc) {
-  case 0:
-    return ((Value(*)())ptr)();
-  case 1:
-    return ((Value(*)(Value))ptr)(args[0]);
-  case 2:
-    return ((Value(*)(Value, Value))ptr)(args[0], args[1]);
-  case 3:
-    return ((Value(*)(Value, Value, Value))ptr)(args[0], args[1], args[2]);
-  case 4:
-    return ((Value(*)(Value, Value, Value, Value))ptr)(args[0], args[1], args[2],
-                                                       args[3]);
-  case 5:
-    return ((Value(*)(Value, Value, Value, Value, Value))ptr)(
-        args[0], args[1], args[2], args[3], args[4]);
-  case 6:
-    return ((Value(*)(Value, Value, Value, Value, Value, Value))ptr)(
-        args[0], args[1], args[2], args[3], args[4], args[5]);
-  default:
-    return val_nil();
-  }
+  // Unified convention: Value func(Value self, Value v0, Value v1, Value v2, Value v3, Value v4)
+  return ((Value (*)(Value, Value, Value, Value, Value, Value))ptr)(
+      val_nil(), args[0], args[1], args[2], args[3], args[4]);
 }
 
 static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1242,7 +1227,7 @@ static Value eval_call(AstNode *node, Environment *env) {
           if (node->data.call.arg_count > 0) {
             Value val = eval(node->data.call.args[0], env);
             if (val.type == VAL_RETURN) val = *val.data.return_val;
-            nr_rt_push(obj, val);
+            nr_rt_push(val_nil(), obj, val, val_nil(), val_nil(), val_nil());
             return val;
           }
         } else if (strcmp(field_name, "pop") == 0) {
@@ -1269,7 +1254,7 @@ static Value eval_call(AstNode *node, Environment *env) {
             Value arr = val_arr();
             for (int i = 0; i < arg.data.obj->count; i++) {
               if (arg.data.obj->keys[i]) {
-                nr_rt_push(arr, val_str(arg.data.obj->keys[i]));
+                nr_rt_push(val_nil(), arr, val_str(arg.data.obj->keys[i]), val_nil(), val_nil(), val_nil());
               }
             }
             return arr;
@@ -1316,7 +1301,7 @@ static Value eval_call(AstNode *node, Environment *env) {
             Value arr = val_arr();
             for (int i = 0; i < arg.data.obj->count; i++) {
               if (arg.data.obj->keys[i]) {
-                nr_rt_push(arr, val_str(nr_strdup(arg.data.obj->keys[i])));
+                nr_rt_push(val_nil(), arr, val_str(nr_strdup(arg.data.obj->keys[i])), val_nil(), val_nil(), val_nil());
               }
             }
             return arr;
@@ -1468,7 +1453,7 @@ static Value eval_call(AstNode *node, Environment *env) {
             Value arr = val_arr();
             for (int i = 0; i < arg.data.obj->count; i++) {
               if (arg.data.obj->keys[i]) {
-                nr_rt_push(arr, val_str(arg.data.obj->keys[i]));
+                nr_rt_push(val_nil(), arr, val_str(arg.data.obj->keys[i]), val_nil(), val_nil(), val_nil());
               }
             }
             return arr;
@@ -1540,7 +1525,7 @@ static Value eval_call(AstNode *node, Environment *env) {
       if (strcmp(full_name, "__builtin_args") == 0) {
         Value arr = val_arr();
         for (int i = 0; i < g_argc; i++) {
-          nr_rt_push(arr, val_str(g_argv[i]));
+          nr_rt_push(val_nil(), arr, val_str(g_argv[i]), val_nil(), val_nil(), val_nil());
         }
         return arr;
       }
@@ -1555,98 +1540,6 @@ static Value eval_call(AstNode *node, Environment *env) {
         return val_nil();
       }
 
-      if (strcmp(full_name, "__builtin_sqlite3_open") == 0) {
-        Value path = eval(node->data.call.args[0], env);
-        if (path.type == VAL_RETURN) path = *path.data.return_val;
-        if (path.type != VAL_STR) return val_nil();
-        sqlite3 *db;
-        if (sqlite3_open(path.data.s, &db) != SQLITE_OK) return val_nil();
-        return val_int((long long)db);
-      }
-
-      if (strcmp(full_name, "__builtin_sqlite3_close") == 0) {
-        Value db_val = eval(node->data.call.args[0], env);
-        if (db_val.type == VAL_RETURN) db_val = *db_val.data.return_val;
-        if (db_val.type != VAL_INT) return val_nil();
-        sqlite3_close((sqlite3 *)db_val.data.i);
-        return val_nil();
-      }
-
-      if (strcmp(full_name, "__builtin_sqlite3_exec") == 0) {
-        Value db_val = eval(node->data.call.args[0], env);
-        if (db_val.type == VAL_RETURN) db_val = *db_val.data.return_val;
-        Value sql = eval(node->data.call.args[1], env);
-        if (sql.type == VAL_RETURN) sql = *sql.data.return_val;
-        Value params = eval(node->data.call.args[2], env);
-        if (params.type == VAL_RETURN) params = *params.data.return_val;
-
-        if (db_val.type != VAL_INT || sql.type != VAL_STR) return val_nil();
-        sqlite3 *db = (sqlite3 *)db_val.data.i;
-        sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL) != SQLITE_OK)
-          return val_error((char *)sqlite3_errmsg(db));
-
-        if (params.type == VAL_ARR) {
-          for (int i = 0; i < params.data.arr->count; i++) {
-            Value p = *params.data.arr->elements[i];
-            if (p.type == VAL_INT) sqlite3_bind_int64(stmt, i + 1, p.data.i);
-            else if (p.type == VAL_FLOAT) sqlite3_bind_double(stmt, i + 1, p.data.f);
-            else if (p.type == VAL_STR) sqlite3_bind_text(stmt, i + 1, p.data.s, -1, SQLITE_TRANSIENT);
-            else if (p.type == VAL_NIL) sqlite3_bind_null(stmt, i + 1);
-          }
-        }
-        int res = sqlite3_step(stmt);
-        sqlite3_finalize(stmt);
-        return val_bool(res == SQLITE_DONE || res == SQLITE_OK);
-      }
-
-      if (strcmp(full_name, "__builtin_sqlite3_query") == 0) {
-        Value db_val = eval(node->data.call.args[0], env);
-        if (db_val.type == VAL_RETURN) db_val = *db_val.data.return_val;
-        Value sql = eval(node->data.call.args[1], env);
-        if (sql.type == VAL_RETURN) sql = *sql.data.return_val;
-        Value params = eval(node->data.call.args[2], env);
-        if (params.type == VAL_RETURN) params = *params.data.return_val;
-
-        if (db_val.type != VAL_INT || sql.type != VAL_STR) return val_nil();
-        sqlite3 *db = (sqlite3 *)db_val.data.i;
-        sqlite3_stmt *stmt;
-        if (sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL) != SQLITE_OK)
-          return val_error((char *)sqlite3_errmsg(db));
-
-        if (params.type == VAL_ARR) {
-          for (int i = 0; i < params.data.arr->count; i++) {
-            Value p = *params.data.arr->elements[i];
-            if (p.type == VAL_INT) sqlite3_bind_int64(stmt, i + 1, p.data.i);
-            else if (p.type == VAL_FLOAT) sqlite3_bind_double(stmt, i + 1, p.data.f);
-            else if (p.type == VAL_STR) sqlite3_bind_text(stmt, i + 1, p.data.s, -1, SQLITE_TRANSIENT);
-            else if (p.type == VAL_NIL) sqlite3_bind_null(stmt, i + 1);
-          }
-        }
-
-        Value res_arr = val_arr();
-        int cols = sqlite3_column_count(stmt);
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-          Value row = val_obj();
-          for (int i = 0; i < cols; i++) {
-            const char *name = sqlite3_column_name(stmt, i);
-            int type = sqlite3_column_type(stmt, i);
-            Value val;
-            if (type == SQLITE_INTEGER)
-              val = val_int(sqlite3_column_int64(stmt, i));
-            else if (type == SQLITE_FLOAT)
-              val = val_float(sqlite3_column_double(stmt, i));
-            else if (type == SQLITE_TEXT)
-              val = val_str(nr_strdup((const char *)sqlite3_column_text(stmt, i)));
-            else
-              val = val_nil();
-            set_field(row, name, val);
-          }
-          nr_rt_push(res_arr, row);
-        }
-        sqlite3_finalize(stmt);
-        return res_arr;
-      }
 
       // Resolve global function
       func_val = env_get_by_hash(env, full_name, node->data.call.hash);

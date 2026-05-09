@@ -16,6 +16,7 @@ static AstNode *function_decls[8192];
 static int function_count = 0;
 static char *global_vars[8192];
 static int global_var_count = 0;
+static char linker_flags[4096] = "";
 
 static int is_function(const char *name) {
     for (int i = 0; i < function_count; i++) if (strcmp(function_names[i], name) == 0) return 1;
@@ -158,29 +159,6 @@ static void print_runtime(FILE *out) {
     fprintf(out, "Value nr_rt_from_base64(Value self, Value v, Value _v1, Value _v2, Value _v3, Value _v4) { if(v.type!=VAL_STR) return val_nil(); int l=strlen(v.data.s); if(l%%4!=0) return val_nil(); int ol=l/4*3; if(v.data.s[l-1]=='=') ol--; if(v.data.s[l-2]=='=') ol--; char* res=nr_alloc(ol+1); static char dt[256]; static int built=0; if(!built){ for(int i=0;i<64;i++) dt[(unsigned char)B64T[i]]=i; built=1; } int i=0,j=0; while(i<l){ uint32_t a=dt[(unsigned char)v.data.s[i++]]; uint32_t b=dt[(unsigned char)v.data.s[i++]]; uint32_t c=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t d=v.data.s[i]=='='?0:dt[(unsigned char)v.data.s[i++]]; if(v.data.s[i-1]!='=') i--; i++; uint32_t t=(a<<18)|(b<<12)|(c<<6)|d; if(j<ol) res[j++]=(t>>16)&0xFF; if(j<ol) res[j++]=(t>>8)&0xFF; if(j<ol) res[j++]=t&0xFF; } res[ol]=0; return val_str(res); }\n");
     fprintf(out, "Value nr_rt_to_set(Value self, Value arr, Value _v1, Value _v2, Value _v3, Value _v4) { if(arr.type!=VAL_ARR) return val_arr(); Value res=val_arr(); for(int i=0;i<arr.data.arr->count;i++){ Value v=arr.data.arr->elements[i]; int f=0; for(int j=0;j<res.data.arr->count;j++) if(res.data.arr->elements[j].type==v.type && res.data.arr->elements[j].data.i==v.data.i) { f=1; break; } if(!f) nr_rt_push(val_nil(),res,v,val_nil(),val_nil(),val_nil()); } return res; }\n");
     fprintf(out, "Value nr_rt_keys(Value self, Value obj, Value _v1, Value _v2, Value _v3, Value _v4) { if(obj.type!=VAL_OBJ) return val_arr(); Value res=val_arr(); for(int i=0;i<obj.data.obj->count;i++) if(obj.data.obj->keys[i]) nr_rt_push(val_nil(), res, val_str(nr_strdup(obj.data.obj->keys[i])), val_nil(), val_nil(), val_nil()); return res; }\n");
-    fprintf(out, "Value nr_rt_sqlite3_open(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4);\n");
-    fprintf(out, "Value nr_rt_sqlite3_close(Value self, Value db_v, Value _v1, Value _v2, Value _v3, Value _v4);\n");
-    fprintf(out, "Value nr_rt_sqlite3_exec(Value self, Value db_v, Value sql, Value params, Value _v3, Value _v4);\n");
-    fprintf(out, "Value nr_rt_sqlite3_query(Value self, Value db_v, Value sql, Value params, Value _v3, Value _v4);\n");
-    fprintf(out, "Value nr_rt_sqlite3_open(Value self, Value path, Value _v1, Value _v2, Value _v3, Value _v4) {\n");
-    fprintf(out, "  if(path.type!=VAL_STR) return val_nil(); sqlite3* db; if(sqlite3_open(path.data.s, &db)!=SQLITE_OK) return val_nil();\n");
-    fprintf(out, "  Value conn = val_int((long long)db); Value m = val_obj(); set_field(m, \"_conn\", conn);\n");
-    fprintf(out, "  set_field(m, \"exec\", val_func(nr_rt_sqlite3_exec)); set_field(m, \"query\", val_func(nr_rt_sqlite3_query)); set_field(m, \"close\", val_func(nr_rt_sqlite3_close)); return m;\n}\n");
-    fprintf(out, "Value nr_rt_sqlite3_close(Value self, Value db_v, Value _v1, Value _v2, Value _v3, Value _v4) { Value conn = (self.type==VAL_OBJ) ? get_field(self, \"_conn\") : db_v; if(conn.type!=VAL_INT) return val_nil(); sqlite3_close((sqlite3*)conn.data.i); return val_nil(); }\n");
-    fprintf(out, "Value nr_rt_sqlite3_exec(Value self, Value db_v, Value sql_v, Value params_v, Value _v3, Value _v4) {\n");
-    fprintf(out, "  Value conn = (self.type==VAL_OBJ) ? get_field(self, \"_conn\") : db_v;\n");
-    fprintf(out, "  Value sql = (self.type==VAL_OBJ) ? db_v : sql_v;\n");
-    fprintf(out, "  Value params = (self.type==VAL_OBJ) ? sql_v : params_v;\n");
-    fprintf(out, "  if(conn.type!=VAL_INT || sql.type!=VAL_STR) return val_nil(); sqlite3* db=(sqlite3*)conn.data.i; sqlite3_stmt* stmt; if(sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL)!=SQLITE_OK) return val_nil();\n");
-    fprintf(out, "  if(params.type==VAL_ARR) for(int i=0;i<params.data.arr->count;i++){ Value p=params.data.arr->elements[i]; if(p.type==VAL_INT) sqlite3_bind_int64(stmt, i+1, p.data.i); else if(p.type==VAL_FLOAT) sqlite3_bind_double(stmt, i+1, p.data.f); else if(p.type==VAL_STR) sqlite3_bind_text(stmt, i+1, p.data.s, -1, SQLITE_TRANSIENT); else if(p.type==VAL_NIL) sqlite3_bind_null(stmt, i+1); }\n");
-    fprintf(out, "  int res=sqlite3_step(stmt); sqlite3_finalize(stmt); return val_bool(res==SQLITE_DONE || res==SQLITE_OK); }\n");
-    fprintf(out, "Value nr_rt_sqlite3_query(Value self, Value db_v, Value sql_v, Value params_v, Value _v3, Value _v4) {\n");
-    fprintf(out, "  Value conn = (self.type==VAL_OBJ) ? get_field(self, \"_conn\") : db_v;\n");
-    fprintf(out, "  Value sql = (self.type==VAL_OBJ) ? db_v : sql_v;\n");
-    fprintf(out, "  Value params = (self.type==VAL_OBJ) ? sql_v : params_v;\n");
-    fprintf(out, "  if(conn.type!=VAL_INT || sql.type!=VAL_STR) return val_nil(); sqlite3* db=(sqlite3*)conn.data.i; sqlite3_stmt* stmt; if(sqlite3_prepare_v2(db, sql.data.s, -1, &stmt, NULL)!=SQLITE_OK) return val_nil();\n");
-    fprintf(out, "  if(params.type==VAL_ARR) for(int i=0;i<params.data.arr->count;i++){ Value p=params.data.arr->elements[i]; if(p.type==VAL_INT) sqlite3_bind_int64(stmt, i+1, p.data.i); else if(p.type==VAL_FLOAT) sqlite3_bind_double(stmt, i+1, p.data.f); else if(p.type==VAL_STR) sqlite3_bind_text(stmt, i+1, p.data.s, -1, SQLITE_TRANSIENT); else if(p.type==VAL_NIL) sqlite3_bind_null(stmt, i+1); }\n");
-    fprintf(out, "  Value res_arr=val_arr(); int cols=sqlite3_column_count(stmt); while(sqlite3_step(stmt)==SQLITE_ROW){ Value row=val_obj(); for(int i=0;i<cols;i++){ const char* name=sqlite3_column_name(stmt, i); int type=sqlite3_column_type(stmt, i); Value val; if(type==SQLITE_INTEGER) val=val_int(sqlite3_column_int64(stmt, i)); else if(type==SQLITE_FLOAT) val=(Value){.type=VAL_FLOAT,.data.f=sqlite3_column_double(stmt, i)}; else if(type==SQLITE_TEXT) val=val_str(nr_strdup((const char*)sqlite3_column_text(stmt, i))); else val=val_nil(); set_field(row, name, val); } nr_rt_push(val_nil(), res_arr, row, val_nil(), val_nil(), val_nil()); } sqlite3_finalize(stmt); return res_arr; }\n");
     fprintf(out, "\nValue nr_rt_http_serve(Value self, Value port_v, Value routes_v, Value _v3, Value _v4, Value _v5) {\n");
     fprintf(out, "  int server_fd; struct sockaddr_in addr; addr.sin_family=AF_INET; addr.sin_addr.s_addr=INADDR_ANY; addr.sin_port=htons(port_v.data.i);\n");
     fprintf(out, "  while(1) {\n");
@@ -278,7 +256,6 @@ static void print_runtime(FILE *out) {
     fprintf(out, "  if (strcmp(name, \"parse\") == 0) { Value m = val_obj(); set_field(m, \"parseInt\", val_func(nr_rt_parse_int)); set_field(m, \"parseFloat\", val_func(nr_rt_parse_float)); set_field(m, \"parseBool\", val_func(nr_rt_parse_bool)); return m; }\n");
     fprintf(out, "  if (strcmp(name, \"encoding\") == 0) { Value m = val_obj(); set_field(m, \"toBase64\", val_func(nr_rt_to_base64)); set_field(m, \"fromBase64\", val_func(nr_rt_from_base64)); return m; }\n");
     fprintf(out, "  if (strcmp(name, \"collection\") == 0) { Value m = val_obj(); set_field(m, \"toSet\", val_func(nr_rt_to_set)); return m; }\n");
-    fprintf(out, "  if (strcmp(name, \"sqlite3\") == 0) { Value m = val_obj(); set_field(m, \"open\", val_func(nr_rt_sqlite3_open)); set_field(m, \"close\", val_func(nr_rt_sqlite3_close)); set_field(m, \"exec\", val_func(nr_rt_sqlite3_exec)); set_field(m, \"query\", val_func(nr_rt_sqlite3_query)); return m; }\n");
     fprintf(out, "  if (strcmp(name, \"object\") == 0) { Value m = val_obj(); set_field(m, \"keys\", val_func(nr_rt_obj_keys)); set_field(m, \"assign\", val_func(nr_rt_obj_assign)); return m; }\n");
     fprintf(out, "  if (strcmp(name, \"string\") == 0) { Value m = val_obj(); return m; }\n");
     fprintf(out, "  if (strcmp(name, \"array\") == 0) { Value m = val_obj(); set_field(m, \"push\", val_func(nr_rt_push)); return m; }\n");
@@ -311,6 +288,12 @@ static void collect_functions(AstNode *node, FILE *out) {
         }
         // Recurse into function body to find nested closures
         collect_functions(node->data.func_decl.body, out);
+    } else if (node->type == AST_EXTERN && node->data.extern_stmt.name) {
+        if (!is_global(node->data.extern_stmt.name)) {
+            global_vars[global_var_count++] = strdup(node->data.extern_stmt.name);
+        }
+    } else if (node->type == AST_PROGRAM) {
+        for (int i = 0; i < node->data.program.count; i++) collect_functions(node->data.program.statements[i], out);
     } else if (node->type == AST_ASSIGN) {
         collect_functions(node->data.assign.value, out);
     } else if (node->type == AST_OBJECT) {
@@ -378,6 +361,18 @@ static void generate_functions(AstNode *root, AstNode *node, FILE *out) {
         
         // Recurse into body to find nested functions (closures)
         generate_functions(root, node->data.func_decl.body, out);
+    } else if (node->type == AST_NATIVE) {
+        if (node->data.native_stmt.code) {
+            fprintf(out, "// Native block\n%s\n", node->data.native_stmt.code);
+        }
+        for (int i = 0; i < node->data.native_stmt.link_count; i++) {
+            if (!strstr(linker_flags, node->data.native_stmt.links[i])) {
+                strcat(linker_flags, node->data.native_stmt.links[i]);
+                strcat(linker_flags, " ");
+            }
+        }
+    } else if (node->type == AST_EXTERN && node->data.extern_stmt.name) {
+        fprintf(out, "Value %s(Value self, Value _v0, Value _v1, Value _v2, Value _v3, Value _v4);\n", node->data.extern_stmt.name);
     } else if (node->type == AST_ASSIGN) {
         generate_functions(root, node->data.assign.value, out);
     } else if (node->type == AST_OBJECT) {
@@ -594,10 +589,6 @@ void codegen_c_node(AstNode *node, FILE *out) {
     else if (strcmp(n, "__builtin_delay") == 0) { fprintf(out, "nr_rt_delay(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", val_nil(), val_nil(), val_nil(), val_nil())"); }
     else if (strcmp(n, "__builtin_args") == 0) { fprintf(out, "nr_rt_args(val_nil(), val_nil(), val_nil(), val_nil(), val_nil(), val_nil())"); }
     else if (strcmp(n, "__builtin_exit_proc") == 0) { fprintf(out, "nr_rt_exit(val_nil(), "); if(node->data.call.arg_count > 0) codegen_c_node(node->data.call.args[0], out); else fprintf(out, "val_int(0)"); fprintf(out, ", val_nil(), val_nil(), val_nil(), val_nil())"); }
-    else if (strcmp(n, "__builtin_sqlite3_open") == 0) { fprintf(out, "nr_rt_sqlite3_open(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", val_nil(), val_nil(), val_nil(), val_nil())"); }
-    else if (strcmp(n, "__builtin_sqlite3_close") == 0) { fprintf(out, "nr_rt_sqlite3_close(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", val_nil(), val_nil(), val_nil(), val_nil())"); }
-    else if (strcmp(n, "__builtin_sqlite3_exec") == 0) { fprintf(out, "nr_rt_sqlite3_exec(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[1], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[2], out); fprintf(out, ", val_nil(), val_nil())"); }
-    else if (strcmp(n, "__builtin_sqlite3_query") == 0) { fprintf(out, "nr_rt_sqlite3_query(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[1], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[2], out); fprintf(out, ", val_nil(), val_nil())"); }
     else if (strcmp(n, "__builtin_obj_keys") == 0) { fprintf(out, "nr_rt_obj_keys(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", val_nil(), val_nil(), val_nil(), val_nil())"); }
     else if (strcmp(n, "__builtin_obj_assign") == 0) { fprintf(out, "nr_rt_obj_assign(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", "); codegen_c_node(node->data.call.args[1], out); fprintf(out, ", val_nil(), val_nil(), val_nil())"); }
     else if (strcmp(n, "__builtin_keys") == 0) { fprintf(out, "nr_rt_obj_keys(val_nil(), "); codegen_c_node(node->data.call.args[0], out); fprintf(out, ", val_nil(), val_nil(), val_nil(), val_nil())"); }
@@ -705,6 +696,12 @@ void codegen_c_node(AstNode *node, FILE *out) {
     if (n && strcmp(n, "main") != 0) fprintf(out, "val_func(nr_%s)", n);
     else fprintf(out, "val_nil()");
     } break;
+  case AST_EXTERN: {
+    if (node->data.extern_stmt.name) {
+        fprintf(out, "  nr_v_%s = val_func(%s);\n", node->data.extern_stmt.name, node->data.extern_stmt.name);
+    }
+    } break;
+  case AST_NATIVE: break;
   default: break;
   }
 }
@@ -788,6 +785,7 @@ static void collect_all_globals(AstNode *node) {
 
 void codegen_c_program(AstNode *node, FILE *out) {
   function_count = 0; global_var_count = 0;
+  linker_flags[0] = '\0';
   print_runtime(out);
   const char* criticals[] = {"start", "end", "sum", "i", "j", "n", "temp", "s", "result", "millis", "arr", "count", "toInt", "json", "file", "http"};
   for (int i=0; i<16; i++) if (!is_global(criticals[i])) global_vars[global_var_count++] = strdup(criticals[i]);
@@ -824,4 +822,4 @@ void codegen_c_program(AstNode *node, FILE *out) {
   }
   fprintf(out, "  return 0; \n}\n");
 }
-char *codegen_get_links() { return "-lsqlite3"; }
+char *codegen_get_links() { return linker_flags; }

@@ -92,7 +92,7 @@ Value eval(AstNode* node, Environment* env);
 // FFI Compatibility Functions
 void* nr_alloc(size_t sz);
 char* nr_strdup(const char* s);
-Value nr_rt_push(Value arr, Value val);
+Value nr_rt_push(Value self, Value arr, Value val, Value _v2, Value _v3, Value _v4);
 void set_field(Value obj, const char* key, Value val);
 Value get_field(Value obj, const char* key);
 void print_value(Value v);

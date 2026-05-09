@@ -1,24 +1,23 @@
-native:
-  link "-lsqlite3"
-  header "<sqlite3.h>"
-  code: """
+#include "evaluator.h"
+#include <sqlite3.h>
+
     #include <sqlite3.h>
     #include <string.h>
     #include <stdio.h>
 
     Value nira_sqlite3_open(Value self, Value path, Value _v2, Value _v3, Value _v4, Value _v5) {
         if (path.type != VAL_STR) {
-            printf("FFI: path is not a string!\\n");
+            printf("FFI: path is not a string!\n");
             return val_nil();
         }
-        printf("FFI: opening database: %s\\n", path.data.s);
+        printf("FFI: opening database: %s\n", path.data.s);
         sqlite3 *db;
         int rc = sqlite3_open(path.data.s, &db);
         if (rc != SQLITE_OK) {
-            printf("FFI: sqlite3_open failed with rc=%d\\n", rc);
+            printf("FFI: sqlite3_open failed with rc=%d\n", rc);
             return val_nil();
         }
-        printf("FFI: database opened successfully, pointer: %p\\n", db);
+        printf("FFI: database opened successfully, pointer: %p\n", db);
         return val_int((long long)db);
     }
 
@@ -85,32 +84,4 @@ native:
         sqlite3_finalize(stmt);
         return res_arr;
     }
-  """
-
-extern nira_sqlite3_open(path)
-extern nira_sqlite3_close(conn)
-extern nira_sqlite3_exec(conn, sql, params)
-extern nira_sqlite3_query(conn, sql, params)
-
-open(path):
-  conn = nira_sqlite3_open(path)
-  if conn == nil:
-    return nil
-  return {
-    _conn: conn
-    exec: fn(sql, params=[]):
-      return nira_sqlite3_exec(conn, sql, params or [])
-    query: fn(sql, params=[]):
-      return nira_sqlite3_query(conn, sql, params or [])
-    close: fn():
-      return nira_sqlite3_close(conn)
-  }
-
-exec(conn, sql, params=[]):
-  return nira_sqlite3_exec(conn, sql, params or [])
-
-query(conn, sql, params=[]):
-  return nira_sqlite3_query(conn, sql, params or [])
-
-close(conn):
-  return nira_sqlite3_close(conn)
+  
