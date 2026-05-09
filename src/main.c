@@ -250,6 +250,8 @@ void print_help() {
   printf("Usage:\n");
   printf("  nira run <file>       Transpile and run the script immediately\n");
   printf("  nira build <file>     Transpile and compile to a standalone binary\n");
+  printf("  nira test             Run all tests in tests/ folder (Interpreter)\n");
+  printf("  nira test -b          Run all tests in tests/ folder (AOT Build)\n");
   printf("  nira install <pkg>    Install a dependency locally\n");
   printf("  nira install -g <pkg> Install a dependency globally\n");
   printf("  nira help             Show this help message\n\n");

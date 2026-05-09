@@ -58,6 +58,12 @@ Nira comes with a comprehensive standard library designed for modern application
 ```
 The binary will be optimized with `-Ofast -funroll-loops -march=native`.
 
+### Running Tests
+```bash
+./nira test        # Run all tests using the interpreter
+./nira test -b     # Run all tests using the AOT compiler (built binary)
+```
+
 ## 🧠 Memory Model
 
 Nira uses a **Hybrid Memory Model**:

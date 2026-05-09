@@ -23,6 +23,7 @@ Kami baru saja menyelesaikan perombakan arsitektur besar-besaran untuk mencapai 
 ### 4. Optimalisasi Operator Atomik & Type Safety
 - **Correctness First**: Jalur transpilisasi kini memprioritaskan ketepatan tipe dan *scoping*. Kami telah menghilangkan unboxing agresif berbasis nama yang tidak aman untuk memastikan kode Nira yang kompleks (seperti JSON Engine) berjalan 100% akurat.
 - **C-Native Arithmetic**: Operator aritmatika pada variabel loop tetap menggunakan instruksi mesin C asli untuk performa maksimal.
+- **100% Test Parity**: AOT Compiler kini melewati seluruh suite pengujian (38/38) dengan hasil identik dengan Interpreter, termasuk fitur kompleks seperti closure capture, nested functions, dan complex objects.
 
 ### 5. Standard Library Memory Integration
 - **Arena-Backed Objects**: Modul seperti `time` dan `math` kini mengembalikan obyek yang terdaftar di Arena, memudahkan manajemen siklus hidup obyek tanpa manual free.
@@ -51,4 +52,4 @@ Mengembangkan analisis statis untuk menentukan variabel mana yang bisa dialokasi
 Mendukung pembuatan Arena kustom untuk tugas-tugas spesifik (misal: per-request pada server HTTP) yang bisa dibersihkan sekaligus.
 
 ---
-*Last Updated: 2026-05-08 | Version: 2.1 (Stability Edition)*
+*Last Updated: 2026-05-09 | Version: 2.2 (Full Parity Edition)*
